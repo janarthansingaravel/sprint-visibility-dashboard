@@ -181,7 +181,7 @@ class AzureDevOpsClient:
             st.error(f"API Error: {e}")
             return None
 
-    def get_current_sprint(self, team: str) -> dict | None:
+    def get_current_sprint(self, team: str) -> dict:
         """Get the current active sprint for a team."""
         url = f"{self.org_url}/{self.project}/{requests.utils.quote(team)}/_apis/work/teamsettings/iterations"
         data = self._get(url, params={"$timeframe": "current", "api-version": "7.0"})
@@ -195,8 +195,15 @@ class AzureDevOpsClient:
         data = self._get(url, params={"api-version": "7.0"})
         if not data:
             return []
-        return [wi["id"] for wi in data.get("workItemRelations", [])
-                if wi.get("rel") is None or wi["rel"] in ["System.LinkTypes.Hierarchy-Forward", None]]
+        ids = []
+        for wi in data.get("workItemRelations", []):
+            try:
+                target = wi.get("target")
+                if target and target.get("id"):
+                    ids.append(target["id"])
+            except Exception:
+                continue
+        return ids
 
     def get_work_items_batch(self, ids: list) -> list:
         """Fetch work item details in batches of 200."""
@@ -225,7 +232,7 @@ class AzureDevOpsClient:
                 all_items.extend(data.get("value", []))
         return all_items
 
-    def get_work_item_with_parent(self, item_id: int) -> dict | None:
+    def get_work_item_with_parent(self, item_id: int) -> dict:
         """Get a single work item with relations to find parent chain."""
         url = f"{self.org_url}/_apis/wit/workitems/{item_id}"
         return self._get(url, params={"$expand": "relations", "api-version": "7.0"})
@@ -259,7 +266,7 @@ def calculate_working_hours_left(sprint_end: date) -> int:
         current = date.fromordinal(current.toordinal() + 1)
     return count * 8
 
-def classify_item_risk(item: dict, hrs_left: int) -> tuple[str, list[str]]:
+def classify_item_risk(item: dict, hrs_left: int) -> tuple:
     """Returns (risk_tier, reasons) — 'none' | 'watch' | 'high'"""
     state     = item.get("state", "")
     est       = item.get("original_estimate", 0) or 0
@@ -307,7 +314,7 @@ def classify_item_risk(item: dict, hrs_left: int) -> tuple[str, list[str]]:
 
     return risk, reasons
 
-def classify_overburn(item: dict) -> tuple[bool, float]:
+def classify_overburn(item: dict) -> tuple:
     """Returns (is_overburn, overrun_hours)"""
     state = item.get("state", "")
     est   = item.get("original_estimate", 0) or 0
