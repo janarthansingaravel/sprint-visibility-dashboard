@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="PI Sprint Command Center",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # ──────────────────────────────────────────
@@ -758,37 +758,6 @@ def _render_feature_risk_table(all_team_data: list):
         return
 
     df = pd.DataFrame(rows)
-
-    def color_risk(val):
-        if val == "HIGH":   return "color: #ef4444; font-weight: bold"
-        if val == "WATCH":  return "color: #f59e0b; font-weight: bold"
-        return "color: #4b6278"
-
-    def color_overburn(val):
-        return "color: #f97316; font-weight: bold" if val != "—" else "color: #374151"
-
-    styled = (df.style
-              .applymap(color_risk,     subset=["Risk"])
-              .applymap(color_overburn, subset=["Overburn"])
-              .set_properties(**{
-                  "background-color": "#0d1424",
-                  "color": "#94a3b8",
-                  "border": "1px solid #1a2640",
-                  "font-size": "11px",
-                  "font-family": "JetBrains Mono, monospace",
-              })
-              .set_table_styles([{
-                  "selector": "th",
-                  "props": [
-                      ("background-color", "#080c14"),
-                      ("color", "#4b6278"),
-                      ("font-size", "10px"),
-                      ("letter-spacing", "1px"),
-                      ("text-transform", "uppercase"),
-                      ("border", "1px solid #1a2640"),
-                  ]
-              }]))
-
     st.dataframe(df, use_container_width=True, hide_index=True, height=320)
 
 
