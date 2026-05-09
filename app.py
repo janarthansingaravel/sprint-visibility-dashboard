@@ -647,77 +647,88 @@ def render_command_center(all_team_data: list):
 
 
 def _render_team_card(tdata: dict):
-    team    = tdata.get("team", "")
-    health  = tdata.get("health", {})
-    status  = health.get("status", "no_data")
-    cfg     = STATUS_CONFIG[status]
-    avatar  = TEAM_AVATARS.get(team, "🔷")
-    score   = health.get("score", 0)
-    sprint  = tdata.get("sprint_name", "—")
-    error   = tdata.get("error")
-
-    # Completion bar color
+    team      = tdata.get("team", "")
+    health    = tdata.get("health", {})
+    status    = health.get("status", "no_data")
+    cfg       = STATUS_CONFIG[status]
+    avatar    = TEAM_AVATARS.get(team, "🔷")
+    score     = health.get("score", 0)
+    sprint    = tdata.get("sprint_name", "—")
+    error     = tdata.get("error")
     bar_color = cfg["color"]
     comp_pct  = health.get("completion_pct", 0)
-
-    card_html = f"""
-    <div style="background:#0d1424;border:2px solid {cfg['border']};border-radius:10px;
-         padding:18px;position:relative;overflow:hidden;
-         box-shadow:0 0 20px {cfg['color']}18">
-        <div style="position:absolute;top:0;left:0;right:0;height:3px;
-             background:linear-gradient(90deg,{cfg['color']},transparent)"></div>
-
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
-            <div>
-                <div style="font-size:22px;margin-bottom:4px">{avatar}</div>
-                <div style="font-family:'Syne',sans-serif;font-size:13px;font-weight:800;
-                     color:#e2e8f0;line-height:1.2">{team}</div>
-                <div style="font-size:9px;color:#374151;margin-top:2px">{sprint}</div>
-            </div>
-            <div>{score_ring_html(score, cfg['color'], 50)}</div>
-        </div>
-
-        <div style="margin-bottom:10px">{status_badge_html(status, 10)}</div>
-    """
+    bar_fill  = min(comp_pct, 100)
 
     if error:
-        card_html += f'<div style="font-size:10px;color:#ef4444;margin-top:8px">{error}</div>'
+        body_html = f'<div style="font-size:10px;color:#ef4444;margin-top:8px">{error}</div>'
     else:
-        card_html += f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
-            <div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">
-                <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:800;
-                     color:#ef4444">{health.get('high_count', 0)}</div>
-                <div style="font-size:9px;color:#4b6278">HIGH RISK</div>
-            </div>
-            <div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">
-                <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:800;
-                     color:#f59e0b">{health.get('watch_count', 0)}</div>
-                <div style="font-size:9px;color:#4b6278">WATCH</div>
-            </div>
-            <div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">
-                <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:800;
-                     color:#f97316">{health.get('overburn_count', 0)}</div>
-                <div style="font-size:9px;color:#4b6278">OVERBURN</div>
-            </div>
-            <div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">
-                <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:800;
-                     color:#10b981">{health.get('completion_pct', 0)}%</div>
-                <div style="font-size:9px;color:#4b6278">COMPLETE</div>
-            </div>
-        </div>
-        <div style="font-size:9px;color:#4b6278;margin-bottom:2px">SPRINT COMPLETION</div>
-        {mini_bar_html(comp_pct, bar_color, 6)}
-        """
+        body_html = (
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">'
+            f'<div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">'
+            f'<div style="font-size:18px;font-weight:800;color:#ef4444">{health.get("high_count", 0)}</div>'
+            f'<div style="font-size:9px;color:#4b6278">HIGH RISK</div></div>'
+            f'<div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">'
+            f'<div style="font-size:18px;font-weight:800;color:#f59e0b">{health.get("watch_count", 0)}</div>'
+            f'<div style="font-size:9px;color:#4b6278">WATCH</div></div>'
+            f'<div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">'
+            f'<div style="font-size:18px;font-weight:800;color:#f97316">{health.get("overburn_count", 0)}</div>'
+            f'<div style="font-size:9px;color:#4b6278">OVERBURN</div></div>'
+            f'<div style="background:#080c14;border-radius:4px;padding:8px;text-align:center">'
+            f'<div style="font-size:18px;font-weight:800;color:#10b981">{health.get("completion_pct", 0)}%</div>'
+            f'<div style="font-size:9px;color:#4b6278">COMPLETE</div></div>'
+            f'</div>'
+            f'<div style="font-size:9px;color:#4b6278;margin-bottom:2px">SPRINT COMPLETION</div>'
+            f'<div style="background:#1a2640;border-radius:3px;height:6px;overflow:hidden;margin-top:4px">'
+            f'<div style="width:{bar_fill}%;height:100%;background:{bar_color};border-radius:3px"></div></div>'
+        )
 
-    card_html += "</div>"
+    circum = 138.2
+    offset = circum * (1 - score / 100)
+    ring_svg = (
+        f'<svg width="50" height="50" viewBox="0 0 50 50">'
+        f'<circle cx="25" cy="25" r="22" fill="none" stroke="#1a2640" stroke-width="4"/>'
+        f'<circle cx="25" cy="25" r="22" fill="none" stroke="{bar_color}" stroke-width="4"'
+        f' stroke-dasharray="{circum}" stroke-dashoffset="{offset:.1f}"'
+        f' stroke-linecap="round" transform="rotate(-90 25 25)"/>'
+        f'<text x="25" y="30" text-anchor="middle" fill="{bar_color}"'
+        f' font-size="12" font-weight="800">{score}</text>'
+        f'</svg>'
+    )
+
+    badge_cfg = STATUS_CONFIG.get(status, STATUS_CONFIG["no_data"])
+    badge = (
+        f'<span style="background:{badge_cfg["bg"]};color:{badge_cfg["color"]};'
+        f'border:1px solid {badge_cfg["border"]};border-radius:3px;padding:2px 8px;'
+        f'font-size:10px;font-weight:700;letter-spacing:1px">'
+        f'{badge_cfg["icon"]} {badge_cfg["label"]}</span>'
+    )
+
+    card_html = (
+        f'<div style="background:#0d1424;border:2px solid {cfg["border"]};border-radius:10px;'
+        f'padding:18px;position:relative;overflow:hidden;box-shadow:0 0 20px {cfg["color"]}18">'
+        f'<div style="position:absolute;top:0;left:0;right:0;height:3px;'
+        f'background:linear-gradient(90deg,{cfg["color"]},transparent)"></div>'
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">'
+        f'<div>'
+        f'<div style="font-size:22px;margin-bottom:4px">{avatar}</div>'
+        f'<div style="font-size:13px;font-weight:800;color:#e2e8f0;line-height:1.2">{team}</div>'
+        f'<div style="font-size:9px;color:#374151;margin-top:2px">{sprint}</div>'
+        f'</div>'
+        f'<div>{ring_svg}</div>'
+        f'</div>'
+        f'<div style="margin-bottom:10px">{badge}</div>'
+        f'{body_html}'
+        f'</div>'
+    )
+
     st.markdown(card_html, unsafe_allow_html=True)
 
-    # Drill-down button
-    if st.button(f"View {team.split()[0]} Detail →", key=f"btn_{team}", use_container_width=True):
-        st.session_state["view"]         = "team_detail"
+    if st.button(f"View {team.split()[0]} →", key=f"btn_{team}", use_container_width=True):
+        st.session_state["view"]          = "team_detail"
         st.session_state["selected_team"] = team
         st.rerun()
+
+
 
 
 def _render_feature_risk_table(all_team_data: list):
