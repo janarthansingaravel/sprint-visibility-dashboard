@@ -20,12 +20,54 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────
-# CSS — clean, professional, corporate
+# ACCESS CONTROL — Gmail restriction via Streamlit Secrets
+# ─────────────────────────────────────────────────────────────────
+def check_access():
+    try:
+        allowed = st.secrets["access"]["allowed_emails"]
+        user_email = st.user.email if hasattr(st, "user") and st.user else None
+        if not user_email:
+            return True  # Local dev — skip check
+        if user_email not in allowed:
+            st.markdown(f"""
+            <div style="display:flex;flex-direction:column;align-items:center;
+                 justify-content:center;min-height:80vh;text-align:center">
+                <div style="font-size:56px;margin-bottom:20px">🚫</div>
+                <div style="font-size:24px;font-weight:800;color:#1a202c;margin-bottom:10px">Access Denied</div>
+                <div style="font-size:15px;color:#6b7280;max-width:400px;line-height:1.7">
+                    <b>{user_email}</b> is not authorised to access this dashboard.<br><br>
+                    Please contact the Scrum Master to request access.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.stop()
+    except Exception:
+        pass  # No secrets configured — allow access (local dev)
+    return True
+
+check_access()
+
+# ─────────────────────────────────────────────────────────────────
+# AUTO-LOAD SECRETS
+# ─────────────────────────────────────────────────────────────────
+def load_secrets():
+    try:
+        s = st.secrets["azure_devops"]
+        if not st.session_state.get("pat"):
+            st.session_state["org_url"] = s.get("org_url","")
+            st.session_state["project"] = s.get("project","HRM")
+            st.session_state["pat"]     = s.get("pat","")
+    except Exception:
+        pass  # No secrets — user enters manually
+
+load_secrets()
+
+# ─────────────────────────────────────────────────────────────────
+# CSS
 # ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif !important;
     background: #ffffff !important;
@@ -36,7 +78,6 @@ html, body, [class*="css"] {
 .block-container { padding: 1.5rem 2.5rem !important; max-width: 100% !important; }
 #MainMenu, footer, header { visibility: hidden; }
 .stDeployButton { display: none; }
-
 [data-testid="stSidebar"] {
     background: #ffffff !important;
     border-right: 1px solid #e8ecf0 !important;
@@ -48,15 +89,13 @@ html, body, [class*="css"] {
 }
 [data-testid="stSidebar"] label {
     font-size: 11px !important; font-weight: 600 !important;
-    color: #8896a5 !important; text-transform: uppercase !important; letter-spacing: 0.5px !important;
+    color: #8896a5 !important; text-transform: uppercase !important;
 }
-
 .stButton > button {
     font-family: 'Inter', sans-serif !important; font-size: 13px !important;
     font-weight: 600 !important; border-radius: 6px !important;
     border: 1px solid #d1d9e0 !important; background: #ffffff !important;
-    color: #374151 !important; padding: 7px 16px !important;
-    transition: all 0.15s !important;
+    color: #374151 !important; padding: 7px 16px !important; transition: all 0.15s !important;
 }
 .stButton > button:hover {
     border-color: #2563eb !important; color: #2563eb !important; background: #eff6ff !important;
@@ -64,8 +103,7 @@ html, body, [class*="css"] {
 .stDownloadButton > button {
     font-family: 'Inter', sans-serif !important; font-size: 13px !important;
     font-weight: 600 !important; border-radius: 6px !important;
-    background: #eff6ff !important; color: #2563eb !important;
-    border: 1px solid #bfdbfe !important;
+    background: #eff6ff !important; color: #2563eb !important; border: 1px solid #bfdbfe !important;
 }
 div[data-testid="stTabs"] button {
     font-family: 'Inter', sans-serif !important; font-size: 14px !important;
@@ -74,10 +112,13 @@ div[data-testid="stTabs"] button {
 div[data-testid="stTabs"] button[aria-selected="true"] {
     font-weight: 700 !important; color: #1a202c !important;
 }
-.stDataFrame { border-radius: 8px !important; }
-[data-testid="stMetric"] { background: #ffffff; border-radius: 8px; padding: 1rem; border: 1px solid #e8ecf0; }
+[data-testid="stMetric"] {
+    background: #ffffff; border-radius: 8px; padding: 1rem;
+    border: 1px solid #e8ecf0;
+}
 [data-testid="stMetricValue"] { font-size: 2.2rem !important; font-weight: 800 !important; }
 [data-testid="stMetricLabel"] { font-size: 13px !important; font-weight: 600 !important; color: #6b7280 !important; }
+.stDataFrame { border-radius: 8px !important; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: #f7f9fc; }
 ::-webkit-scrollbar-thumb { background: #d1d9e0; border-radius: 3px; }
@@ -96,17 +137,17 @@ INPROGRESS   = ["In Progress","Scheduled"]
 VALID_TYPES  = ["Task","Bug"]
 
 STATUS = {
-    "critical": {"color":"#dc2626","bg":"#fef2f2","border":"#fecaca","text":"Critical",  "icon":"🔴"},
-    "atrisk":   {"color":"#d97706","bg":"#fffbeb","border":"#fde68a","text":"At Risk",   "icon":"🟡"},
-    "watch":    {"color":"#ca8a04","bg":"#fefce8","border":"#fef08a","text":"Watch",     "icon":"🟡"},
-    "healthy":  {"color":"#16a34a","bg":"#f0fdf4","border":"#bbf7d0","text":"Healthy",   "icon":"🟢"},
-    "no_data":  {"color":"#6b7280","bg":"#f9fafb","border":"#e5e7eb","text":"No Data",   "icon":"⚫"},
+    "critical":{"color":"#dc2626","bg":"#fef2f2","border":"#fecaca","text":"Critical","icon":"🔴"},
+    "atrisk":  {"color":"#d97706","bg":"#fffbeb","border":"#fde68a","text":"At Risk", "icon":"🟡"},
+    "watch":   {"color":"#ca8a04","bg":"#fefce8","border":"#fef08a","text":"Watch",   "icon":"🟡"},
+    "healthy": {"color":"#16a34a","bg":"#f0fdf4","border":"#bbf7d0","text":"Healthy", "icon":"🟢"},
+    "no_data": {"color":"#6b7280","bg":"#f9fafb","border":"#e5e7eb","text":"No Data", "icon":"⚫"},
 }
 BLOCKED_TAGS = {
-    "Env-Unstable":    {"label":"Environment Unstable","icon":"🌩️","color":"#7c3aed","owner":"DevOps Team",   "desc":"Env unstable — cannot test/deploy"},
-    "PR-Approval":     {"label":"PR Awaiting Approval","icon":"🔀","color":"#1d4ed8","owner":"Tech Lead",     "desc":"PR waiting for code review"},
-    "Test-Data-Issue": {"label":"Test Data Issue",     "icon":"🗄️","color":"#b45309","owner":"BA / QA Lead", "desc":"Missing or incorrect test data"},
-    "Blocked":         {"label":"Blocked",             "icon":"🚧","color":"#dc2626","owner":"Scrum Master", "desc":"Blocked — needs escalation"},
+    "Env-Unstable":    {"label":"Environment Unstable","icon":"🌩️","color":"#7c3aed","owner":"DevOps Team",  "desc":"Env unstable — cannot test/deploy"},
+    "PR-Approval":     {"label":"PR Awaiting Approval","icon":"🔀","color":"#1d4ed8","owner":"Tech Lead",    "desc":"PR waiting for code review"},
+    "Test-Data-Issue": {"label":"Test Data Issue",     "icon":"🗄️","color":"#b45309","owner":"BA / QA Lead","desc":"Missing or incorrect test data"},
+    "Blocked":         {"label":"Blocked",             "icon":"🚧","color":"#dc2626","owner":"Scrum Master","desc":"Blocked — needs escalation"},
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -203,17 +244,17 @@ def classify_spill(item,hl):
     is_ip=state in INPROGRESS; is_todo=state=="To Do"; is_hold=state=="On hold"
     total=done+rem; prog=(done/total) if total>0 else 0
     risk="none"; reasons=[]
-    if is_hold:                              risk="high"; reasons.append("Blocked — On Hold")
-    if is_todo and rem>hl and hl>0:          risk="high"; reasons.append(f"Not started · {rem}h needed, {hl}h left")
-    if state=="Scheduled" and rem>hl and hl>0: risk="high"; reasons.append(f"Scheduled · {rem}h rem > {hl}h left")
+    if is_hold:                               risk="high"; reasons.append("Blocked — On Hold")
+    if is_todo and rem>hl and hl>0:           risk="high"; reasons.append(f"Not started · {rem}h needed, {hl}h left")
+    if state=="Scheduled" and rem>hl and hl>0:risk="high"; reasons.append(f"Scheduled · {rem}h rem > {hl}h left")
     td=item.get("target_date"); se=item.get("sprint_end")
-    if td and se and td>se:                  risk="high"; reasons.append(f"Target {td.strftime('%b %d')} past sprint end")
+    if td and se and td>se:                   risk="high"; reasons.append(f"Target {td.strftime('%b %d')} past sprint end")
     if risk!="high":
-        if is_todo and 0<rem<=hl and rem>4:  risk="watch"; reasons.append(f"Not started · {rem}h remaining")
-        if is_ip and total>4 and prog<0.3:   risk="watch"; reasons.append(f"Only {int(prog*100)}% complete")
-        if is_ip and done==0 and rem>0:      risk="watch"; reasons.append("In Progress — 0 hours logged")
-        if state=="Scheduled":               risk="watch"; reasons.append("Scheduled — not activated")
-        if is_ip and hl>0 and rem>(hl*0.8): risk="watch"; reasons.append(f"{rem}h rem, limited time left")
+        if is_todo and 0<rem<=hl and rem>4:   risk="watch"; reasons.append(f"Not started · {rem}h remaining")
+        if is_ip and total>4 and prog<0.3:    risk="watch"; reasons.append(f"Only {int(prog*100)}% complete")
+        if is_ip and done==0 and rem>0:       risk="watch"; reasons.append("In Progress — 0 hours logged")
+        if state=="Scheduled":                risk="watch"; reasons.append("Scheduled — not activated")
+        if is_ip and hl>0 and rem>(hl*0.8):  risk="watch"; reasons.append(f"{rem}h rem, limited time left")
     return risk,reasons
 
 def classify_overburn(item):
@@ -226,10 +267,17 @@ def classify_overburn(item):
         proj=done+rem; ov=proj-est; return ov>0,round(max(ov,0),1),round(proj,1)
     return False,0,done
 
+def hour_completion_pct(items):
+    """Completion % based on hours: Completed Work / Original Estimate, capped at 100%."""
+    total_est  = sum(i.get("est",0) or 0 for i in items)
+    total_done = sum(i.get("done",0) or 0 for i in items)
+    if total_est <= 0: return 0
+    return min(round(total_done / total_est * 100), 100)
+
 def member_risk_score(items):
-    return sum(3 if i.get("spill_risk")=="high" else 1 if i.get("spill_risk")=="watch" else 0 for i in items) + \
-           sum(2 for i in items if i.get("is_overburn")) + \
-           sum(1 for i in items if i.get("is_blocked"))
+    return (sum(3 if i.get("spill_risk")=="high" else 1 if i.get("spill_risk")=="watch" else 0 for i in items)
+            + sum(2 for i in items if i.get("is_overburn"))
+            + sum(1 for i in items if i.get("is_blocked")))
 
 def compute_health(items):
     tasks=[i for i in items if i.get("type") in VALID_TYPES] or items
@@ -240,7 +288,8 @@ def compute_health(items):
     bc=sum(1 for i in tasks if i.get("is_blocked"))
     unc=sum(1 for i in tasks if i.get("is_unestimated"))
     dic=sum(1 for i in tasks if i.get("has_date_issue"))
-    cp=round(dc/n*100) if n else 0; op=round(oc/n*100) if n else 0
+    cp=hour_completion_pct(tasks)
+    op=round(oc/n*100) if n else 0
     if hc>=3 or op>=30 or bc>=3: h="critical"
     elif hc>=1 or op>=15 or bc>=1: h="atrisk"
     elif wc>=1 or oc>0: h="watch"
@@ -416,7 +465,7 @@ def build_excel(all_data):
     buf.seek(0); return buf
 
 # ─────────────────────────────────────────────────────────────────
-# ITEMS → DATAFRAME  (for clean table display)
+# ITEMS → DATAFRAME
 # ─────────────────────────────────────────────────────────────────
 def items_to_df(items, sort_col=None, sort_asc=True):
     rows=[]
@@ -425,36 +474,36 @@ def items_to_df(items, sort_col=None, sort_asc=True):
         bk=i.get("is_blocked",False); un=i.get("is_unestimated",False); di=i.get("has_date_issue",False)
         flags=", ".join(filter(None,[
             "🔴 High Spill" if sr=="high" else "🟡 Watch" if sr=="watch" else "",
-            "🔥 Overburn"  if ob else "",
-            "🚧 Blocked"   if bk else "",
-            "📋 No Estimate" if un else "",
-            "📅 Date Issue"  if di else "",
-        ])) or "✅ OK"
+            "🔥 Overburn" if ob else "","🚧 Blocked" if bk else "",
+            "📋 No Est" if un else "","📅 Date Issue" if di else ""])) or "✅ OK"
         rows.append({
-            "ID":         i.get("id"),
-            "Title":      (i["title"][:65]+"…") if len(i["title"])>65 else i["title"],
-            "Type":       i.get("type",""),
-            "Assignee":   i.get("assignee","—"),
-            "State":      i.get("state",""),
-            "Est (h)":    i.get("est") or 0,
-            "Done (h)":   i.get("done") or 0,
-            "Rem (h)":    i.get("rem") or 0,
-            "Overrun (h)":i.get("overrun") or 0,
-            "Spill Risk": sr.upper() if sr!="none" else "—",
-            "Flags":      flags,
-            "Feature":    (i.get("feature_title","")[:40]+"…") if i.get("feature_title") and len(i.get("feature_title",""))>40 else i.get("feature_title","—"),
-            "Tags":       i.get("tags",""),
-            "DevOps Link":i.get("devops_url",""),
+            "ID":i.get("id"),"Type":i.get("type",""),
+            "Title":(i["title"][:65]+"…") if len(i["title"])>65 else i["title"],
+            "Assignee":i.get("assignee","—"),"State":i.get("state",""),
+            "Est (h)":i.get("est") or 0,"Done (h)":i.get("done") or 0,
+            "Rem (h)":i.get("rem") or 0,"Overrun (h)":i.get("overrun") or 0,
+            "Spill Risk":sr.upper() if sr!="none" else "—",
+            "Flags":flags,"Feature":i.get("feature_title","—"),
+            "Tags":i.get("tags",""),"DevOps Link":i.get("devops_url",""),
         })
     df=pd.DataFrame(rows)
     if sort_col and sort_col in df.columns:
         df=df.sort_values(sort_col,ascending=sort_asc)
     return df
 
+def show_df(items, sort_col=None, asc=True, height=380, key=None):
+    if not items:
+        st.success("✅ No items in this category")
+        return
+    df=items_to_df(items,sort_col,asc)
+    st.dataframe(df,use_container_width=True,hide_index=True,height=height,
+                 key=key,
+                 column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link",display_text="Open in DevOps ↗")})
+
 # ─────────────────────────────────────────────────────────────────
 # NINE-BOX GRID
 # ─────────────────────────────────────────────────────────────────
-def build_nine_box_fig(all_data):
+def render_nine_box(all_data):
     members=defaultdict(lambda:{"items":[],"team":""})
     for t in all_data:
         for i in t.get("items",[]):
@@ -465,74 +514,60 @@ def build_nine_box_fig(all_data):
     for name,data in members.items():
         items=data["items"]; team=data["team"]
         if not items: continue
-        total=len(items); done_c=sum(1 for i in items if i["state"] in COMPLETED)
-        comp=round(done_c/total*100); rsc=member_risk_score(items)
-        est_h=sum(i.get("est",0) or 0 for i in items)
+        comp=hour_completion_pct(items)
+        rsc=member_risk_score(items); est_h=sum(i.get("est",0) or 0 for i in items)
         sh=sum(1 for i in items if i.get("spill_risk")=="high")
         sw=sum(1 for i in items if i.get("spill_risk")=="watch")
         oc=sum(1 for i in items if i.get("is_overburn"))
         bc=sum(1 for i in items if i.get("is_blocked"))
-        risk_n=min(rsc*5,100); dot_sz=max(28,min(est_h*1.6,50))
-        if sh>0:    dc="#dc2626"
-        elif oc>0:  dc="#ea580c"
-        elif bc>0:  dc="#7c3aed"
-        elif sw>0:  dc="#ca8a04"
-        else:       dc="#16a34a"
+        total=len(items); risk_n=min(rsc*5,100); dot_sz=max(28,min(est_h*1.6,50))
+        if sh>0:   dc="#dc2626"
+        elif oc>0: dc="#ea580c"
+        elif bc>0: dc="#7c3aed"
+        elif sw>0: dc="#ca8a04"
+        else:      dc="#16a34a"
         in_crit=risk_n>60 and comp<40
         dots.append({"name":name,"team":team,"x":comp,"y":risk_n,"sz":dot_sz,"dc":dc,
                      "label":name.split()[0] if in_crit else inits(name),"crit":in_crit,
                      "comp":comp,"rsc":rsc,"sh":sh,"sw":sw,"oc":oc,"bc":bc,
                      "total":total,"est_h":est_h,"has_b":bc>0})
 
+    if not dots: st.info("No member data."); return
+
     fig=go.Figure()
-
-    # Quadrant fills
-    quads=[
-        (0,66,40,100,"#fef2f2","🔴  CRITICAL",    "#dc2626"),
-        (40,66,75,100,"#fff7ed","🔥  OVERLOADED",  "#ea580c"),
-        (75,66,100,100,"#fefce8","⚡  STRETCHED",   "#ca8a04"),
-        (0,33,40,66, "#fff7ed","⚠️  STRUGGLING",  "#ea580c"),
-        (40,33,75,66, "#fefce8","👁  WATCH",        "#ca8a04"),
-        (75,33,100,66,"#f0fdf4","📈  ON TRACK",     "#16a34a"),
-        (0,0,40,33,  "#fefce8","🐢  SLOW START",   "#ca8a04"),
-        (40,0,75,33, "#f0fdf4","✅  DELIVERING",   "#16a34a"),
-        (75,0,100,33,"#f0fdf4","⭐  STAR",         "#16a34a"),
-    ]
+    quads=[(0,66,40,100,"#fef2f2","🔴  CRITICAL","#dc2626"),
+           (40,66,75,100,"#fff7ed","🔥  OVERLOADED","#ea580c"),
+           (75,66,100,100,"#fefce8","⚡  STRETCHED","#ca8a04"),
+           (0,33,40,66,"#fff7ed","⚠️  STRUGGLING","#ea580c"),
+           (40,33,75,66,"#fefce8","👁  WATCH","#ca8a04"),
+           (75,33,100,66,"#f0fdf4","📈  ON TRACK","#16a34a"),
+           (0,0,40,33,"#fefce8","🐢  SLOW START","#ca8a04"),
+           (40,0,75,33,"#f0fdf4","✅  DELIVERING","#16a34a"),
+           (75,0,100,33,"#f0fdf4","⭐  STAR","#16a34a")]
     for x0,y0,x1,y1,bg,lbl,lc in quads:
-        fig.add_shape(type="rect",x0=x0,y0=y0,x1=x1,y1=y1,
-                      fillcolor=bg,line=dict(color="#e5e7eb",width=1.5))
+        fig.add_shape(type="rect",x0=x0,y0=y0,x1=x1,y1=y1,fillcolor=bg,line=dict(color="#e5e7eb",width=1.5))
         fig.add_annotation(x=(x0+x1)/2,y=(y0+y1)/2+14,text=f"<b>{lbl}</b>",
-                           font=dict(size=11,color=lc),showarrow=False,
-                           xanchor="center",yanchor="middle")
-
-    # Grid lines
+                           font=dict(size=11,color=lc),showarrow=False,xanchor="center",yanchor="middle")
     for v in [40,75]:
         fig.add_shape(type="line",x0=v,y0=0,x1=v,y1=100,line=dict(color="#d1d5db",width=1.5,dash="dash"))
     for h in [33,66]:
         fig.add_shape(type="line",x0=0,y0=h,x1=100,y1=h,line=dict(color="#d1d5db",width=1.5,dash="dash"))
-
-    # Axis labels
     for x,lbl in [(20,"LOW DELIVERY"),(57,"MEDIUM DELIVERY"),(87,"HIGH DELIVERY")]:
         fig.add_annotation(x=x,y=-8,text=f"<b>{lbl}</b>",font=dict(size=10,color="#9ca3af"),showarrow=False,xanchor="center")
     for y,lbl in [(16,"LOW RISK"),(50,"MED RISK"),(83,"HIGH RISK")]:
         fig.add_annotation(x=-5,y=y,text=f"<b>{lbl}</b>",font=dict(size=10,color="#9ca3af"),showarrow=False,xanchor="right",yanchor="middle")
 
-    # Purple ring for blocked
     for d in [x for x in dots if x["has_b"]]:
         fig.add_trace(go.Scatter(x=[d["x"]],y=[d["y"]],mode="markers",
                                  marker=dict(size=d["sz"]+14,color="rgba(124,58,237,0.12)",
                                              line=dict(color="#7c3aed",width=2.5)),
                                  showlegend=False,hoverinfo="skip"))
-
-    # Team color ring
     for d in dots:
         tc=TEAM_COLORS.get(d["team"],"#6b7280")
         fig.add_trace(go.Scatter(x=[d["x"]],y=[d["y"]],mode="markers",
                                  marker=dict(size=d["sz"]+8,color="rgba(255,255,255,0.9)",
                                              line=dict(color=tc,width=3)),
                                  showlegend=False,hoverinfo="skip"))
-
-    # Critical glow
     crit=[d for d in dots if d["crit"]]
     if crit:
         fig.add_trace(go.Scatter(x=[d["x"] for d in crit],y=[d["y"] for d in crit],mode="markers",
@@ -540,96 +575,139 @@ def build_nine_box_fig(all_data):
                                              color=["rgba(220,38,38,0.1)" for _ in crit],
                                              line=dict(color="#dc2626",width=1.5)),
                                  showlegend=False,hoverinfo="skip"))
-
-    # Main dots
     for d in dots:
         fig.add_trace(go.Scatter(
             x=[d["x"]],y=[d["y"]],mode="markers+text",
-            marker=dict(size=d["sz"],color=d["dc"],opacity=0.9,
-                        line=dict(color="rgba(255,255,255,0.8)",width=2)),
+            marker=dict(size=d["sz"],color=d["dc"],opacity=0.9,line=dict(color="rgba(255,255,255,0.8)",width=2)),
             text=f"<b>{d['label']}</b>",textposition="middle center",
             textfont=dict(size=9,color="#ffffff"),
             customdata=[[d["name"],d["team"],d["comp"],d["rsc"],d["sh"],d["sw"],d["oc"],d["bc"],d["total"],d["est_h"]]],
-            hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                "Team: %{customdata[1]}<br>"
-                "Completion: %{customdata[2]}%<br>"
-                "Risk Score: %{customdata[3]}<br>"
-                "━━━━━━━━━━━━━━<br>"
-                "🔴 High Spill: %{customdata[4]}<br>"
-                "🟡 Watch: %{customdata[5]}<br>"
-                "🔥 Overburn: %{customdata[6]}<br>"
-                "🚧 Blocked: %{customdata[7]}<br>"
-                "━━━━━━━━━━━━━━<br>"
-                "Total Items: %{customdata[8]}<br>"
-                "Est Hours: %{customdata[9]:.0f}h"
-                "<extra></extra>"
-            ),
+            hovertemplate=("<b>%{customdata[0]}</b><br>Team: %{customdata[1]}<br>"
+                           "Completion: %{customdata[2]}%<br>Risk Score: %{customdata[3]}<br>"
+                           "━━━━━━━━━━<br>🔴 High: %{customdata[4]} · 🟡 Watch: %{customdata[5]}<br>"
+                           "🔥 Overburn: %{customdata[6]} · 🚧 Blocked: %{customdata[7]}<br>"
+                           "━━━━━━━━━━<br>Items: %{customdata[8]} · Est: %{customdata[9]:.0f}h<extra></extra>"),
             showlegend=False,name=d["name"]
         ))
 
-    fig.update_layout(
-        height=520,margin=dict(l=70,r=30,t=60,b=70),
-        plot_bgcolor="#ffffff",paper_bgcolor="#ffffff",
-        title_text="<b>Member Performance Nine-Box — Click a dot to view member details</b>",
-        title_x=0.0,
-        xaxis=dict(range=[-8,108],showgrid=False,zeroline=False,showticklabels=False,title=""),
-        yaxis=dict(range=[-12,108],showgrid=False,zeroline=False,showticklabels=False,title=""),
-        clickmode="event+select",
-    )
-    return fig, dots
+    fig.update_layout(height=520,margin=dict(l=70,r=30,t=50,b=70),
+                      plot_bgcolor="#ffffff",paper_bgcolor="#ffffff",
+                      title_text="<b>Member Performance Nine-Box — Click a dot to view details</b>",
+                      title_x=0.0,clickmode="event+select",
+                      xaxis=dict(range=[-8,108],showgrid=False,zeroline=False,showticklabels=False,title=""),
+                      yaxis=dict(range=[-12,108],showgrid=False,zeroline=False,showticklabels=False,title=""))
 
-def render_nine_box(all_data):
-    fig, dots = build_nine_box_fig(all_data)
-    event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="nine_box_chart")
+    event=st.plotly_chart(fig,use_container_width=True,on_select="rerun",key="nine_box")
 
-    # Legend
+    # Legends
     c1,c2=st.columns(2)
     with c1:
-        st.markdown(
-            '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13px;color:#374151">'
-            '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#dc2626;margin-right:5px;vertical-align:middle"></span>High Spill</span>'
-            '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#ea580c;margin-right:5px;vertical-align:middle"></span>Overburn</span>'
-            '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#ca8a04;margin-right:5px;vertical-align:middle"></span>Watch</span>'
-            '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#16a34a;margin-right:5px;vertical-align:middle"></span>Clean</span>'
-            '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:3px solid #7c3aed;background:white;margin-right:5px;vertical-align:middle"></span>Blocked (ring)</span>'
-            '</div>',
-            unsafe_allow_html=True
-        )
+        st.markdown('<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#374151">'
+                    +''.join(f'<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:{c};margin-right:4px;vertical-align:middle"></span>{l}</span>'
+                             for l,c in [("High Spill","#dc2626"),("Overburn","#ea580c"),("Watch","#ca8a04"),("Clean","#16a34a")])
+                    +'<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:3px solid #7c3aed;background:white;margin-right:4px;vertical-align:middle"></span>Blocked (ring)</span>'
+                    +'</div>',unsafe_allow_html=True)
     with c2:
-        team_leg="".join(
-            f'<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:3px solid {color};background:white;margin-right:5px;vertical-align:middle"></span>'
-            f'{TEAM_AVATARS.get(team,"")} {team.split()[0]}</span>'
-            for team,color in TEAM_COLORS.items()
-        )
-        st.markdown(f'<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:#374151">{team_leg}</div>',unsafe_allow_html=True)
+        st.markdown('<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:#374151">'
+                    +''.join(f'<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:3px solid {c};background:white;margin-right:4px;vertical-align:middle"></span>{TEAM_AVATARS.get(t,"")} {t.split()[0]}</span>'
+                             for t,c in TEAM_COLORS.items())
+                    +'</div>',unsafe_allow_html=True)
 
-    # Handle click — show member detail table
+    # Click handler
     if event and event.get("selection") and event["selection"].get("points"):
         pts=event["selection"]["points"]
         if pts:
             clicked_name=pts[0].get("customdata",[None])[0]
             if clicked_name:
-                # Find member items
                 all_items=[i for t in all_data for i in t.get("items",[])]
                 member_items=[i for i in all_items if i.get("assignee")==clicked_name]
                 if member_items:
-                    team_name=member_items[0].get("team","")
-                    tc=TEAM_COLORS.get(team_name,"#2563eb")
+                    team_name=member_items[0].get("team",""); tc=TEAM_COLORS.get(team_name,"#2563eb")
                     st.markdown(
-                        f'<div style="margin-top:16px;padding:14px 20px;background:#f8fafc;'
-                        f'border-left:4px solid {tc};border-radius:8px">'
-                        f'<span style="font-size:16px;font-weight:700;color:#1a202c">'
-                        f'{clicked_name}</span>'
-                        f'<span style="font-size:13px;color:#6b7280;margin-left:10px">{team_name}</span>'
-                        f'<span style="font-size:13px;color:#6b7280;margin-left:10px">· {len(member_items)} items</span>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-                    # Sort by risk — High first, then Watch, then Overburn
-                    df=items_to_df(member_items,sort_col="Spill Risk",sort_asc=True)
-                    st.dataframe(df,use_container_width=True,hide_index=True,height=300,
-                                 column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link")})
+                        f'<div style="margin-top:16px;padding:12px 18px;background:#f8fafc;'
+                        f'border-left:4px solid {tc};border-radius:8px;display:flex;align-items:center;gap:12px">'
+                        f'<span style="font-size:16px;font-weight:700;color:#1a202c">{clicked_name}</span>'
+                        f'<span style="font-size:13px;color:#6b7280">{team_name}</span>'
+                        f'<span style="font-size:13px;color:#6b7280">· {len(member_items)} items</span>'
+                        f'</div>',unsafe_allow_html=True)
+                    # Sort: high risk first
+                    risk_order={"high":0,"watch":1,"none":2}
+                    member_items.sort(key=lambda x:risk_order.get(x.get("spill_risk","none"),2))
+                    show_df(member_items,"Spill Risk",height=300,key=f"nb_{clicked_name}")
+
+# ─────────────────────────────────────────────────────────────────
+# TEAM CARD — with clickable metric boxes
+# ─────────────────────────────────────────────────────────────────
+def render_team_card(td, col):
+    team=td.get("team",""); h=td.get("health","no_data"); s=STATUS[h]
+    av=TEAM_AVATARS.get(team,"🔷")
+    hc=td.get("high_count",0); wc=td.get("watch_count",0)
+    oc=td.get("over_count",0); bk=td.get("blocked_count",0)
+    uc=td.get("unest_count",0); dc_=td.get("date_issue_count",0)
+    cp=td.get("comp_pct",0); dl=td.get("days_left",0)
+    ss2=td.get("sprint_start"); se2=td.get("sprint_end"); tf=td.get("timeframe","current")
+    date_tag=(f'<span style="background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;'
+              f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:500;margin-left:6px">'
+              f'{ss2.strftime("%b %d")} → {se2.strftime("%b %d")}</span>' if ss2 and se2 else "")
+    past_tag=('<span style="background:#fef3c7;color:#92400e;border-radius:4px;'
+              'padding:2px 6px;font-size:10px;font-weight:700;margin-left:4px">LAST SPRINT</span>'
+              if tf=="past" else "")
+    dl_c="#dc2626" if dl<=2 else "#d97706" if dl<=4 else "#6b7280"
+    # Total est vs done for hour bar
+    items=td.get("items",[])
+    total_est=sum(i.get("est",0) or 0 for i in items)
+    total_done=sum(i.get("done",0) or 0 for i in items)
+
+    with col:
+        st.markdown(
+            f'<div style="background:#ffffff;border:1px solid #e5e7eb;border-top:4px solid {s["color"]};'
+            f'border-radius:10px;padding:16px;margin-bottom:4px">'
+            f'<div style="margin-bottom:10px">'
+            f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px">'
+            f'<span style="font-size:18px">{av}</span>'
+            f'<span style="font-size:14px;font-weight:700;color:#1a202c">{team}</span>'
+            f'{date_tag}{past_tag}</div>'
+            f'<div style="display:flex;align-items:center;gap:8px">'
+            f'<span style="background:{s["bg"]};color:{s["color"]};border:1px solid {s["border"]};'
+            f'border-radius:12px;padding:1px 10px;font-size:11px;font-weight:700">{s["icon"]} {s["text"].upper()}</span>'
+            f'<span style="font-size:12px;color:{dl_c};font-weight:600">{dl}d left</span>'
+            f'</div></div>'
+            f'<div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:4px">'
+            f'{cp}% COMPLETE &nbsp;·&nbsp; {total_done:.0f}h done of {total_est:.0f}h estimated</div>'
+            f'<div style="background:#f3f4f6;border-radius:4px;height:6px;overflow:hidden;margin-bottom:12px">'
+            f'<div style="width:{cp}%;height:100%;background:{s["color"]};border-radius:4px"></div></div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        # Clickable metric buttons — 2 rows of 3
+        metrics=[
+            ("🔴 High Spill", hc, "high_spill", "#fef2f2", "#dc2626"),
+            ("🟡 Watch",      wc, "watch",       "#fffbeb", "#d97706"),
+            ("🔥 Overburn",   oc, "overburn",    "#fff7ed", "#ea580c"),
+            ("🚧 Blocked",    bk, "blocked",     "#f5f3ff", "#7c3aed"),
+            ("📋 No Est",     uc, "unestimated", "#ecfeff", "#0891b2"),
+            ("📅 Date Issue", dc_,"date_issue",  "#fdf2f8", "#db2777"),
+        ]
+        row1=st.columns(3); row2=st.columns(3)
+        for idx,(label,count,key_suffix,bg,color) in enumerate(metrics):
+            c=row1[idx] if idx<3 else row2[idx-3]
+            with c:
+                st.markdown(
+                    f'<div style="background:{bg};border-radius:6px;padding:8px 4px;text-align:center;margin-bottom:4px">'
+                    f'<div style="font-size:22px;font-weight:800;color:{color}">{count}</div>'
+                    f'<div style="font-size:10px;color:#6b7280;font-weight:600">{label}</div>'
+                    f'</div>',unsafe_allow_html=True)
+                if count > 0:
+                    if st.button("View",key=f"card_{team}_{key_suffix}",use_container_width=True):
+                        st.session_state[f"card_filter_{team}"] = key_suffix
+                        st.session_state.update({"view":"team_detail","selected_team":team})
+                        st.rerun()
+
+        if st.button(f"Full Detail →",key=f"full_{team}",use_container_width=True):
+            st.session_state[f"card_filter_{team}"] = None
+            st.session_state.update({"view":"team_detail","selected_team":team})
+            st.rerun()
 
 # ─────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -637,19 +715,21 @@ def render_nine_box(all_data):
 def render_sidebar():
     with st.sidebar:
         st.markdown('<div style="font-size:20px;font-weight:800;color:#1a202c;padding:8px 0 20px">⚙️ Connection</div>',unsafe_allow_html=True)
-        org =st.text_input("Organisation URL",value=st.session_state.get("org_url","https://dev.azure.com/YOUR_ORG"))
-        proj=st.text_input("Project Name",    value=st.session_state.get("project","HRM"))
-        pat =st.text_input("Personal Access Token",value=st.session_state.get("pat",""),type="password")
-        c1,c2=st.columns(2)
-        with c1:
+        has_secret = bool(st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url",""))
+        if has_secret:
+            st.success("✅ Connected via Streamlit Secrets")
+            st.markdown(f'<div style="font-size:13px;color:#6b7280">Org: <b>{st.session_state.get("org_url","").split("/")[-1]}</b><br>Project: <b>{st.session_state.get("project","")}</b></div>',unsafe_allow_html=True)
+        else:
+            org =st.text_input("Organisation URL",value=st.session_state.get("org_url","https://dev.azure.com/YOUR_ORG"))
+            proj=st.text_input("Project Name",    value=st.session_state.get("project","HRM"))
+            pat =st.text_input("Personal Access Token",value=st.session_state.get("pat",""),type="password")
             if st.button("🔄 Load Live",use_container_width=True):
                 if org and proj and pat:
                     st.session_state.update({"org_url":org,"project":proj,"pat":pat,"use_demo":False,"loaded":False})
                     st.cache_data.clear(); st.rerun()
                 else: st.error("Fill all fields")
-        with c2:
-            if st.button("🧪 Demo",use_container_width=True):
-                st.session_state.update({"use_demo":True,"loaded":False}); st.rerun()
+        if st.button("🧪 Demo Data",use_container_width=True):
+            st.session_state.update({"use_demo":True,"loaded":False}); st.rerun()
         if st.session_state.get("loaded"):
             if st.button("🔃 Refresh",use_container_width=True):
                 st.cache_data.clear(); st.session_state["loaded"]=False; st.rerun()
@@ -668,13 +748,12 @@ def render_alert_center(all_data):
     unest_all  =[i for i in all_items if i.get("is_unestimated")]
     date_all   =[i for i in all_items if i.get("has_date_issue")]
     both       =[i for i in all_items if i.get("spill_risk") in ["high","watch"] and i.get("is_overburn")]
-    total_i    =sum(t.get("total",0) for t in all_data)
-    done_i     =sum(t.get("done_count",0) for t in all_data)
-    comp_pct   =round(done_i/total_i*100) if total_i else 0
+    total_est  =sum(i.get("est",0) or 0 for i in all_items)
+    total_done =sum(i.get("done",0) or 0 for i in all_items)
+    comp_pct   =min(round(total_done/total_est*100),100) if total_est>0 else 0
     total_ov   =sum(i.get("overrun",0) for i in overs)
     now        =datetime.now().strftime("%d %b %Y  %H:%M")
 
-    # Per-team date range
     active=[t for t in all_data if t.get("sprint_end")]
     ends=[t["sprint_end"] for t in active]
     earliest=min(ends) if ends else None; latest=max(ends) if ends else None
@@ -682,13 +761,10 @@ def render_alert_center(all_data):
     min_dl=min((t.get("days_left",0) for t in active),default=0)
     max_dl=max((t.get("days_left",0) for t in active),default=0)
     if all_same and earliest:
-        date_str=f"{earliest.strftime('%d %b %Y')}"
-        days_str=f"{min_dl} working days left"
+        date_str=f"{earliest.strftime('%d %b %Y')}"; days_str=f"{min_dl} working days left"
     else:
         date_str=f"{earliest.strftime('%d %b') if earliest else '—'} – {latest.strftime('%d %b %Y') if latest else '—'}"
         days_str=f"{min_dl}–{max_dl} days left (varies by team)"
-
-    # Overall health
     overall="healthy"
     for t in all_data:
         h=t.get("health","no_data")
@@ -698,171 +774,102 @@ def render_alert_center(all_data):
     os_=STATUS[overall]
     past_teams=[t["team"] for t in all_data if t.get("timeframe")=="past"]
 
-    # ── HEADER ──
-    hcol1, hcol2, hcol3, hcol4 = st.columns([5,1,1,1])
-    with hcol1:
+    # Header
+    hc1,hc2,hc3,hc4=st.columns([5,1,1,1])
+    with hc1:
+        past_note=(" · <span style='color:#92400e'>📅 "+", ".join(past_teams)+" showing last sprint</span>") if past_teams else ""
+        dl_c="#dc2626" if min_dl<=2 else "#d97706" if min_dl<=4 else "#374151"
         st.markdown(
             f'<div style="padding:4px 0 16px 0">'
             f'<div style="font-size:26px;font-weight:800;color:#1a202c">Sprint Execution Monitor</div>'
             f'<div style="font-size:14px;color:#6b7280;margin-top:4px">'
             f'5 Teams &nbsp;·&nbsp; HRM Project &nbsp;·&nbsp; '
             f'<span style="color:#374151;font-weight:500">{date_str}</span> &nbsp;·&nbsp; '
-            f'<span style="color:{"#dc2626" if min_dl<=2 else "#d97706" if min_dl<=4 else "#374151"};font-weight:600">{days_str}</span>'
-            + (f' &nbsp;·&nbsp; <span style="color:#92400e">📅 {", ".join(past_teams)} showing last sprint</span>' if past_teams else "")
-            + f'</div></div>',
-            unsafe_allow_html=True
-        )
-    with hcol2:
-        st.markdown(f'<div style="padding-top:12px;text-align:center"><span style="background:{os_["bg"]};color:{os_["color"]};border:1px solid {os_["border"]};border-radius:20px;padding:4px 14px;font-size:13px;font-weight:700">{os_["icon"]} {os_["text"].upper()}</span><div style="font-size:12px;color:#9ca3af;margin-top:4px">{comp_pct}% · {done_i}/{total_i}</div></div>',unsafe_allow_html=True)
-    with hcol3:
+            f'<span style="color:{dl_c};font-weight:600">{days_str}</span>{past_note}'
+            f'</div></div>',unsafe_allow_html=True)
+    with hc2:
+        st.markdown(f'<div style="padding-top:12px;text-align:center">'
+                    f'<span style="background:{os_["bg"]};color:{os_["color"]};border:1px solid {os_["border"]};'
+                    f'border-radius:20px;padding:4px 14px;font-size:13px;font-weight:700">{os_["icon"]} {os_["text"].upper()}</span>'
+                    f'<div style="font-size:12px;color:#9ca3af;margin-top:4px">{comp_pct}% · {total_done:.0f}/{total_est:.0f}h</div>'
+                    f'</div>',unsafe_allow_html=True)
+    with hc3:
         if st.button("🔲 Nine-Box",use_container_width=True):
             st.session_state["show_nine_box"]=not st.session_state.get("show_nine_box",False); st.rerun()
-    with hcol4:
+    with hc4:
         if st.button("⚙️ Connect",use_container_width=True):
             st.session_state["show_connect"]=not st.session_state.get("show_connect",False); st.rerun()
 
     # Inline connect panel
     if st.session_state.get("show_connect",False):
-        with st.container():
-            st.markdown('<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin-bottom:16px">',unsafe_allow_html=True)
-            cc1,cc2,cc3,cc4,cc5=st.columns([3,2,3,1,1])
-            with cc1: org=st.text_input("Org URL",value=st.session_state.get("org_url","https://dev.azure.com/YOUR_ORG"),key="c_org")
-            with cc2: proj=st.text_input("Project",value=st.session_state.get("project","HRM"),key="c_proj")
-            with cc3: pat=st.text_input("PAT",value=st.session_state.get("pat",""),type="password",key="c_pat")
-            with cc4:
-                st.markdown("<div style='height:28px'></div>",unsafe_allow_html=True)
-                if st.button("Load",key="c_load",use_container_width=True):
-                    if org and proj and pat:
-                        st.session_state.update({"org_url":org,"project":proj,"pat":pat,"use_demo":False,"loaded":False,"show_connect":False})
-                        st.cache_data.clear(); st.rerun()
-            with cc5:
-                st.markdown("<div style='height:28px'></div>",unsafe_allow_html=True)
-                if st.button("Demo",key="c_demo",use_container_width=True):
-                    st.session_state.update({"use_demo":True,"loaded":False,"show_connect":False}); st.rerun()
-            st.markdown('</div>',unsafe_allow_html=True)
+        st.markdown('<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin-bottom:12px">',unsafe_allow_html=True)
+        cc1,cc2,cc3,cc4,cc5=st.columns([3,2,3,1,1])
+        with cc1: org=st.text_input("Org URL",value=st.session_state.get("org_url",""),key="c_org")
+        with cc2: proj=st.text_input("Project",value=st.session_state.get("project","HRM"),key="c_proj")
+        with cc3: pat=st.text_input("PAT",value="",type="password",key="c_pat")
+        with cc4:
+            st.markdown("<div style='height:28px'></div>",unsafe_allow_html=True)
+            if st.button("Load",key="c_load",use_container_width=True):
+                if org and proj and pat:
+                    st.session_state.update({"org_url":org,"project":proj,"pat":pat,"use_demo":False,"loaded":False,"show_connect":False})
+                    st.cache_data.clear(); st.rerun()
+        with cc5:
+            st.markdown("<div style='height:28px'></div>",unsafe_allow_html=True)
+            if st.button("Demo",key="c_demo",use_container_width=True):
+                st.session_state.update({"use_demo":True,"loaded":False,"show_connect":False}); st.rerun()
+        st.markdown('</div>',unsafe_allow_html=True)
 
-    st.markdown(f'<div style="font-size:12px;color:#d1d5db;margin-bottom:16px">Last updated: {now}</div>',unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:12px;color:#d1d5db;margin-bottom:12px">Last updated: {now}</div>',unsafe_allow_html=True)
     st.markdown("---")
 
-    # ── METRICS ROW ──
+    # Metrics row
     m1,m2,m3,m4,m5,m6=st.columns(6)
     env_c=sum(1 for i in blocked_all if any(t=="Env-Unstable"    for t,_ in i.get("blocked_tags",[])))
     pr_c =sum(1 for i in blocked_all if any(t=="PR-Approval"     for t,_ in i.get("blocked_tags",[])))
     td_c =sum(1 for i in blocked_all if any(t=="Test-Data-Issue" for t,_ in i.get("blocked_tags",[])))
-    with m1: st.metric("⚠️ Potential Spillover", len(spill_high)+len(spill_watch), f"{len(spill_high)} High · {len(spill_watch)} Watch")
-    with m2: st.metric("🔥 Overburn Items",      len(overs),                       f"+{total_ov:.0f}h total overrun")
-    with m3: st.metric("🚧 Externally Blocked",  len(blocked_all),                 f"🌩️{env_c} 🔀{pr_c} 🗄️{td_c}")
-    with m4: st.metric("📋 No Estimate",          len(unest_all),                  "items without effort")
-    with m5: st.metric("📅 Date Issues",           len(date_all),                  "missing or out of range")
-    with m6: st.metric("✅ Completed",             f"{comp_pct}%",                  f"{done_i} of {total_i} items")
-
+    with m1: st.metric("⚠️ Potential Spillover",len(spill_high)+len(spill_watch),f"{len(spill_high)} High · {len(spill_watch)} Watch")
+    with m2: st.metric("🔥 Overburn Items",     len(overs),                      f"+{total_ov:.0f}h total overrun")
+    with m3: st.metric("🚧 Externally Blocked", len(blocked_all),                f"🌩️{env_c} 🔀{pr_c} 🗄️{td_c}")
+    with m4: st.metric("📋 No Estimate",         len(unest_all),                 "items without effort")
+    with m5: st.metric("📅 Date Issues",          len(date_all),                 "missing or out of range")
+    with m6: st.metric("✅ Completion",           f"{comp_pct}%",                f"{total_done:.0f}h of {total_est:.0f}h")
     st.markdown("---")
 
-    # ── NINE BOX (toggle) ──
+    # Nine-box (toggle)
     if st.session_state.get("show_nine_box",False):
         st.markdown('<div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:12px">Member Performance Nine-Box</div>',unsafe_allow_html=True)
         render_nine_box(all_data)
         st.markdown("---")
 
-    # ── TEAM CARDS ──
+    # Team cards
     st.markdown('<div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:14px">Team Sprint Status</div>',unsafe_allow_html=True)
     order={"critical":0,"atrisk":1,"watch":2,"healthy":3,"no_data":4}
     sorted_d=sorted(all_data,key=lambda x:order.get(x.get("health","no_data"),4))
     tcols=st.columns(5)
     for col,td in zip(tcols,sorted_d):
-        team=td.get("team",""); h=td.get("health","no_data"); s=STATUS[h]
-        av=TEAM_AVATARS.get(team,"🔷"); tc=TEAM_COLORS.get(team,"#2563eb")
-        hc=td.get("high_count",0); wc=td.get("watch_count",0)
-        oc=td.get("over_count",0); bk=td.get("blocked_count",0)
-        uc=td.get("unest_count",0); dc=td.get("date_issue_count",0)
-        cp=td.get("comp_pct",0); dl=td.get("days_left",0)
-        ss2=td.get("sprint_start"); se2=td.get("sprint_end"); tf=td.get("timeframe","current")
-        # Date tag
-        date_tag=""
-        if ss2 and se2:
-            date_tag=(f'<span style="background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;'
-                      f'border-radius:4px;padding:2px 8px;font-size:11px;font-weight:500;margin-left:8px">'
-                      f'{ss2.strftime("%b %d")} → {se2.strftime("%b %d")}</span>')
-        past_tag=('<span style="background:#fef3c7;color:#92400e;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;margin-left:4px">LAST SPRINT</span>' if tf=="past" else "")
-        dl_c="#dc2626" if dl<=2 else "#d97706" if dl<=4 else "#6b7280"
-        with col:
-            st.markdown(
-                f'<div style="background:#ffffff;border:1px solid #e5e7eb;border-top:4px solid {s["color"]};'
-                f'border-radius:10px;padding:16px;margin-bottom:4px">'
-                # Team name + date tag
-                f'<div style="margin-bottom:10px">'
-                f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px">'
-                f'<span style="font-size:18px">{av}</span>'
-                f'<span style="font-size:14px;font-weight:700;color:#1a202c">{team}</span>'
-                f'{date_tag}{past_tag}</div>'
-                f'<div style="display:flex;align-items:center;gap:8px">'
-                f'<span style="background:{s["bg"]};color:{s["color"]};border:1px solid {s["border"]};'
-                f'border-radius:12px;padding:1px 10px;font-size:11px;font-weight:700">{s["icon"]} {s["text"].upper()}</span>'
-                f'<span style="font-size:12px;color:{dl_c};font-weight:600">{dl}d left</span>'
-                f'</div></div>'
-                # Metrics grid
-                f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">'
-                f'<div style="text-align:center;background:#fef2f2;border-radius:6px;padding:6px">'
-                f'<div style="font-size:20px;font-weight:800;color:#dc2626">{hc}</div>'
-                f'<div style="font-size:10px;color:#6b7280;font-weight:600">HIGH SPILL</div></div>'
-                f'<div style="text-align:center;background:#fffbeb;border-radius:6px;padding:6px">'
-                f'<div style="font-size:20px;font-weight:800;color:#d97706">{wc}</div>'
-                f'<div style="font-size:10px;color:#6b7280;font-weight:600">WATCH</div></div>'
-                f'<div style="text-align:center;background:#fff7ed;border-radius:6px;padding:6px">'
-                f'<div style="font-size:20px;font-weight:800;color:#ea580c">{oc}</div>'
-                f'<div style="font-size:10px;color:#6b7280;font-weight:600">OVERBURN</div></div>'
-                f'<div style="text-align:center;background:#f5f3ff;border-radius:6px;padding:6px">'
-                f'<div style="font-size:20px;font-weight:800;color:#7c3aed">{bk}</div>'
-                f'<div style="font-size:10px;color:#6b7280;font-weight:600">BLOCKED</div></div>'
-                f'<div style="text-align:center;background:#ecfeff;border-radius:6px;padding:6px">'
-                f'<div style="font-size:20px;font-weight:800;color:#0891b2">{uc}</div>'
-                f'<div style="font-size:10px;color:#6b7280;font-weight:600">NO EST</div></div>'
-                f'<div style="text-align:center;background:#fdf2f8;border-radius:6px;padding:6px">'
-                f'<div style="font-size:20px;font-weight:800;color:#db2777">{dc}</div>'
-                f'<div style="font-size:10px;color:#6b7280;font-weight:600">DATE ISSUE</div></div>'
-                f'</div>'
-                # Progress bar
-                f'<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;font-weight:600">{cp}% COMPLETE</div>'
-                f'<div style="background:#f3f4f6;border-radius:4px;height:6px;overflow:hidden">'
-                f'<div style="width:{cp}%;height:100%;background:{s["color"]};border-radius:4px"></div></div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-            if st.button(f"View {team.split()[0]} →",key=f"d_{team}",use_container_width=True):
-                st.session_state.update({"view":"team_detail","selected_team":team}); st.rerun()
+        render_team_card(td,col)
 
     st.markdown("---")
 
-    # ── ITEMS OUT OF TRACK ──
-    col_t, col_dl = st.columns([5,1])
-    with col_t:
+    # Items out of track
+    ct,cd=st.columns([5,1])
+    with ct:
         st.markdown('<div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:2px">Items Going Out of Track</div>',unsafe_allow_html=True)
-    with col_dl:
+    with cd:
         buf=build_excel(all_data)
         st.download_button("📥 Download Excel",data=buf,
                            file_name=f"sprint_all_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key="dl_all",use_container_width=True)
 
-    tabs=st.tabs([
-        f"⚠️ Spillover ({len(spill_high)+len(spill_watch)})",
-        f"🔥 Overburn ({len(overs)})",
-        f"🚧 Blocked ({len(blocked_all)})",
-        f"📋 No Estimate ({len(unest_all)})",
-        f"📅 Date Issues ({len(date_all)})",
-        f"💀 Both Issues ({len(both)})",
-    ])
-
-    def show_table(items, sort_col, asc=True, height=400):
-        if not items:
-            st.success("✅ No items in this category")
-            return
-        df=items_to_df(items,sort_col,asc)
-        st.dataframe(df,use_container_width=True,hide_index=True,height=height,
-                     column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link",display_text="Open ↗")})
-
-    with tabs[0]: show_table(sorted(spill_high+spill_watch,key=lambda x:0 if x.get("spill_risk")=="high" else 1),"Spill Risk")
-    with tabs[1]: show_table(sorted(overs,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False)
+    tabs=st.tabs([f"⚠️ Spillover ({len(spill_high)+len(spill_watch)})",
+                  f"🔥 Overburn ({len(overs)})",
+                  f"🚧 Blocked ({len(blocked_all)})",
+                  f"📋 No Estimate ({len(unest_all)})",
+                  f"📅 Date Issues ({len(date_all)})",
+                  f"💀 Both Issues ({len(both)})"])
+    with tabs[0]: show_df(sorted(spill_high+spill_watch,key=lambda x:0 if x.get("spill_risk")=="high" else 1),"Spill Risk",key="t0")
+    with tabs[1]: show_df(sorted(overs,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False,key="t1")
     with tabs[2]:
         if not blocked_all: st.success("✅ No externally blocked items")
         else:
@@ -871,34 +878,22 @@ def render_alert_center(all_data):
                 for tag,cfg2 in item.get("blocked_tags",[]): grouped[tag].append(item)
             for tag,items2 in grouped.items():
                 tc2=BLOCKED_TAGS.get(tag,BLOCKED_TAGS["Blocked"])
-                st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:10px;padding:10px 16px;'
-                    f'background:#f8fafc;border-left:4px solid {tc2["color"]};border-radius:6px;margin-bottom:8px">'
-                    f'<span style="font-size:18px">{tc2["icon"]}</span>'
-                    f'<div><b style="color:{tc2["color"]}">{tc2["label"]}</b> '
-                    f'<span style="color:#6b7280">· {len(items2)} items · Escalate to: <b>{tc2["owner"]}</b></span></div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-                show_table(items2,"Rem (h)",asc=False,height=250)
-    with tabs[3]: show_table(unest_all,"State",height=400)
+                st.markdown(f'<div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:#f8fafc;border-left:4px solid {tc2["color"]};border-radius:6px;margin-bottom:8px"><span style="font-size:18px">{tc2["icon"]}</span><div><b style="color:{tc2["color"]}">{tc2["label"]}</b> <span style="color:#6b7280">· {len(items2)} items · Escalate to: <b>{tc2["owner"]}</b></span></div></div>',unsafe_allow_html=True)
+                show_df(items2,"Rem (h)",asc=False,height=250,key=f"t2_{tag}")
+    with tabs[3]: show_df(unest_all,"State",key="t3")
     with tabs[4]:
-        if not date_all: st.success("✅ No date issues detected")
+        if not date_all: st.success("✅ No date issues")
         else:
-            rows2=[]
-            for i in date_all:
-                rows2.append({"ID":i.get("id"),"Title":(i["title"][:60]+"…") if len(i["title"])>60 else i["title"],
-                              "Assignee":i.get("assignee",""),"State":i.get("state",""),"Team":i.get("team",""),
-                              "Date Issues":" | ".join(i.get("date_violations",[])),
-                              "Item Start":str(i.get("item_start","")) or "NOT SET",
-                              "Item Target":str(i.get("item_target","")) or "NOT SET",
-                              "Sprint Start":str(i.get("sprint_start","")),
-                              "Sprint End":str(i.get("sprint_end","")),
-                              "DevOps Link":i.get("devops_url","")})
-            df2=pd.DataFrame(rows2)
-            st.dataframe(df2,use_container_width=True,hide_index=True,height=400,
+            rows2=[{"ID":i.get("id"),"Title":(i["title"][:60]+"…") if len(i["title"])>60 else i["title"],
+                    "Assignee":i.get("assignee",""),"State":i.get("state",""),"Team":i.get("team",""),
+                    "Issue":" | ".join(i.get("date_violations",[])),
+                    "Item Start":str(i.get("item_start","")) or "NOT SET",
+                    "Item Target":str(i.get("item_target","")) or "NOT SET",
+                    "Sprint Start":str(i.get("sprint_start","")),"Sprint End":str(i.get("sprint_end","")),
+                    "DevOps Link":i.get("devops_url","")} for i in date_all]
+            st.dataframe(pd.DataFrame(rows2),use_container_width=True,hide_index=True,height=400,
                          column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link",display_text="Open ↗")})
-    with tabs[5]: show_table(sorted(both,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False)
+    with tabs[5]: show_df(sorted(both,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False,key="t5")
 
 # ─────────────────────────────────────────────────────────────────
 # VIEW 2 — TEAM DETAIL
@@ -911,15 +906,18 @@ def render_team_detail(tdata, all_data):
     dl_c="#dc2626" if dl<=2 else "#d97706" if dl<=4 else "#374151"
     date_rng=f"{ss.strftime('%d %b') if ss else '—'} → {se.strftime('%d %b %Y') if se else '—'}"
 
-    # Header
+    # Get the filter from card click (if any)
+    card_filter=st.session_state.get(f"card_filter_{team}")
+
     cb,ch=st.columns([1,10])
     with cb:
-        if st.button("← Back"): st.session_state["view"]="alert_center"; st.rerun()
+        if st.button("← Back"):
+            st.session_state[f"card_filter_{team}"]=None
+            st.session_state["view"]="alert_center"; st.rerun()
     with ch:
         past_b=(' <span style="background:#fef3c7;color:#92400e;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700">LAST SPRINT</span>' if tf=="past" else "")
         st.markdown(
-            f'<div style="padding:4px 0">'
-            f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+            f'<div style="padding:4px 0"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
             f'<span style="font-size:26px">{av}</span>'
             f'<span style="font-size:22px;font-weight:800;color:#1a202c">{team}</span>'
             f'<span style="background:{s["bg"]};color:{s["color"]};border:1px solid {s["border"]};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700">{s["icon"]} {s["text"].upper()}</span>'
@@ -927,13 +925,10 @@ def render_team_detail(tdata, all_data):
             f'<div style="font-size:14px;color:#6b7280;margin-top:4px">'
             f'{sn} &nbsp;·&nbsp; <span style="background:#f1f5f9;color:#374151;border-radius:4px;padding:2px 8px;font-size:13px;font-weight:500">{date_rng}</span>'
             f' &nbsp;·&nbsp; <span style="color:{dl_c};font-weight:600">{dl} working days left</span>'
-            f'</div></div>',
-            unsafe_allow_html=True
-        )
+            f'</div></div>',unsafe_allow_html=True)
 
     st.markdown("<div style='height:12px'></div>",unsafe_allow_html=True)
 
-    # KPI metrics
     spill_h=[i for i in items if i.get("spill_risk")=="high"]
     spill_w=[i for i in items if i.get("spill_risk")=="watch"]
     overs  =[i for i in items if i.get("is_overburn")]
@@ -944,42 +939,72 @@ def render_team_detail(tdata, all_data):
     total_est =sum(i.get("est",0) or 0 for i in items)
     total_done=sum(i.get("done",0) or 0 for i in items)
     total_rem =sum(i.get("rem",0) or 0 for i in items)
+    cp=hour_completion_pct(items)
 
     k1,k2,k3,k4,k5,k6,k7=st.columns(7)
-    with k1: st.metric("Total Items",    len(items),       f"{len(done_it)} done")
-    with k2: st.metric("🔴 High Spill",  len(spill_h),    "likely to spill")
-    with k3: st.metric("🟡 Watch",       len(spill_w),    "needs attention")
-    with k4: st.metric("🔥 Overburn",    len(overs),      f"+{sum(i.get('overrun',0) for i in overs):.0f}h")
-    with k5: st.metric("🚧 Blocked",     len(blocked),    "external dependency")
-    with k6: st.metric("📋 No Estimate", len(unest),      "missing effort")
-    with k7: st.metric("📅 Date Issues", len(datei),      "fix before sprint")
+    with k1: st.metric("Total Items",    len(items),      f"{len(done_it)} done")
+    with k2: st.metric("🔴 High Spill",  len(spill_h),   "likely to spill")
+    with k3: st.metric("🟡 Watch",       len(spill_w),   "needs attention")
+    with k4: st.metric("🔥 Overburn",    len(overs),     f"+{sum(i.get('overrun',0) for i in overs):.0f}h")
+    with k5: st.metric("🚧 Blocked",     len(blocked),   "external dependency")
+    with k6: st.metric("📋 No Estimate", len(unest),     "missing effort")
+    with k7: st.metric("📅 Date Issues", len(datei),     "fix before sprint")
 
-    # Hours summary + Excel
-    st.markdown(
-        f'<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;'
-        f'padding:12px 20px;margin:12px 0;display:flex;gap:32px;align-items:center">'
-        f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">ESTIMATED </span>'
-        f'<span style="font-size:16px;font-weight:800;color:#1a202c">{total_est:.0f}h</span></div>'
-        f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">LOGGED </span>'
-        f'<span style="font-size:16px;font-weight:800;color:#16a34a">{total_done:.0f}h</span></div>'
-        f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">REMAINING </span>'
-        f'<span style="font-size:16px;font-weight:800;color:#d97706">{total_rem:.0f}h</span></div>'
-        f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">COMPLETION </span>'
-        f'<span style="font-size:16px;font-weight:800;color:#2563eb">{tdata.get("comp_pct",0)}%</span></div>'
-        f'<div style="margin-left:auto;font-size:12px;color:#d1d5db">Updated: {datetime.now().strftime("%d %b %Y %H:%M")}</div>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-    dl_col1, dl_col2 = st.columns([5,1])
-    with dl_col2:
+    # Hours bar
+    dcol, excol=st.columns([5,1])
+    with dcol:
+        st.markdown(
+            f'<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;'
+            f'padding:12px 20px;margin:12px 0;display:flex;gap:32px;align-items:center">'
+            f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">ESTIMATED </span>'
+            f'<span style="font-size:16px;font-weight:800;color:#1a202c">{total_est:.0f}h</span></div>'
+            f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">LOGGED </span>'
+            f'<span style="font-size:16px;font-weight:800;color:#16a34a">{total_done:.0f}h</span></div>'
+            f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">REMAINING </span>'
+            f'<span style="font-size:16px;font-weight:800;color:#d97706">{total_rem:.0f}h</span></div>'
+            f'<div><span style="font-size:12px;color:#9ca3af;font-weight:600">COMPLETION </span>'
+            f'<span style="font-size:16px;font-weight:800;color:#2563eb">{cp}%</span>'
+            f'<span style="font-size:11px;color:#9ca3af;margin-left:4px">(hours-based)</span></div>'
+            f'<div style="margin-left:auto;font-size:12px;color:#d1d5db">Updated: {datetime.now().strftime("%d %b %Y %H:%M")}</div>'
+            f'</div>',unsafe_allow_html=True)
+    with excol:
         buf=build_excel([tdata])
-        st.download_button(f"📥 {team.split()[0]} Excel",data=buf,
+        st.download_button(f"📥 Excel",data=buf,
                            file_name=f"sprint_{team.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key="dl_t",use_container_width=True)
 
-    # Tabs
+    # Determine initial tab based on card filter
+    filter_tab_map={"high_spill":0,"watch":0,"overburn":1,"blocked":2,"unestimated":3,"date_issue":3}
+    default_tab=filter_tab_map.get(card_filter,0) if card_filter else 0
+
+    # If came from a card click, show the filtered data prominently
+    if card_filter:
+        filter_items_map={
+            "high_spill": spill_h,
+            "watch":      spill_w,
+            "overburn":   overs,
+            "blocked":    blocked,
+            "unestimated":unest,
+            "date_issue": datei,
+        }
+        filter_label_map={
+            "high_spill":"🔴 High Spill Risk Items",
+            "watch":     "🟡 Watch Items",
+            "overburn":  "🔥 Overburn Items",
+            "blocked":   "🚧 Blocked Items",
+            "unestimated":"📋 Items Without Estimate",
+            "date_issue":"📅 Items With Date Issues",
+        }
+        filtered=filter_items_map.get(card_filter,[])
+        label=filter_label_map.get(card_filter,"")
+        st.markdown(f'<div style="font-size:15px;font-weight:700;color:#1a202c;margin-bottom:8px">{label}</div>',unsafe_allow_html=True)
+        show_df(filtered,height=350,key=f"card_view_{card_filter}")
+        st.markdown("---")
+        if st.button("← Show all tabs"):
+            st.session_state[f"card_filter_{team}"]=None; st.rerun()
+        return
+
     tab1,tab2,tab3,tab4,tab5,tab6=st.tabs([
         f"⚠️ Spillover ({len(spill_h)+len(spill_w)})",
         f"🔥 Overburn ({len(overs)})",
@@ -989,14 +1014,8 @@ def render_team_detail(tdata, all_data):
         f"📋 All Items ({len(items)})",
     ])
 
-    def show_df(its, sc=None, asc=True, h=380):
-        if not its: st.success("✅ Nothing to show here"); return
-        df=items_to_df(its,sc,asc)
-        st.dataframe(df,use_container_width=True,hide_index=True,height=h,
-                     column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link",display_text="Open ↗")})
-
-    with tab1: show_df(sorted(spill_h+spill_w,key=lambda x:0 if x.get("spill_risk")=="high" else 1),"Spill Risk")
-    with tab2: show_df(sorted(overs,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False)
+    with tab1: show_df(sorted(spill_h+spill_w,key=lambda x:0 if x.get("spill_risk")=="high" else 1),"Spill Risk",key="td1")
+    with tab2: show_df(sorted(overs,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False,key="td2")
     with tab3:
         if not blocked: st.success("✅ No blocked items")
         else:
@@ -1006,28 +1025,25 @@ def render_team_detail(tdata, all_data):
             for tag,its in grouped.items():
                 tc2=BLOCKED_TAGS.get(tag,BLOCKED_TAGS["Blocked"])
                 st.markdown(f'<div style="padding:8px 14px;background:#f8fafc;border-left:4px solid {tc2["color"]};border-radius:6px;margin-bottom:8px"><b style="color:{tc2["color"]}">{tc2["icon"]} {tc2["label"]}</b> <span style="color:#6b7280">· Escalate to: <b>{tc2["owner"]}</b></span></div>',unsafe_allow_html=True)
-                show_df(its,"Rem (h)",asc=False,h=220)
+                show_df(its,"Rem (h)",asc=False,height=220,key=f"td3_{tag}")
     with tab4:
         if not unest and not datei: st.success("✅ No data quality issues")
         else:
             if unest:
                 st.markdown('<div style="font-size:14px;font-weight:600;color:#0891b2;margin-bottom:8px">📋 Items Without Original Estimate</div>',unsafe_allow_html=True)
-                show_df(unest,"State",h=280)
+                show_df(unest,"State",height=280,key="td4a")
             if datei:
                 st.markdown('<div style="font-size:14px;font-weight:600;color:#db2777;margin:12px 0 8px">📅 Items With Date Issues</div>',unsafe_allow_html=True)
-                rows2=[]
-                for i in datei:
-                    rows2.append({"ID":i.get("id"),"Title":(i["title"][:55]+"…") if len(i["title"])>55 else i["title"],
-                                  "Assignee":i.get("assignee",""),"State":i.get("state",""),
-                                  "Issue":" | ".join(i.get("date_violations",[])),
-                                  "Item Start":str(i.get("item_start","")) or "NOT SET",
-                                  "Item Target":str(i.get("item_target","")) or "NOT SET",
-                                  "DevOps Link":i.get("devops_url","")})
-                df2=pd.DataFrame(rows2)
-                st.dataframe(df2,use_container_width=True,hide_index=True,height=280,
+                rows2=[{"ID":i.get("id"),"Title":(i["title"][:55]+"…") if len(i["title"])>55 else i["title"],
+                        "Assignee":i.get("assignee",""),"State":i.get("state",""),
+                        "Issue":" | ".join(i.get("date_violations",[])),
+                        "Item Start":str(i.get("item_start","")) or "NOT SET",
+                        "Item Target":str(i.get("item_target","")) or "NOT SET",
+                        "DevOps Link":i.get("devops_url","")} for i in datei]
+                st.dataframe(pd.DataFrame(rows2),use_container_width=True,hide_index=True,height=280,
                              column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link",display_text="Open ↗")})
     with tab5: render_members(items)
-    with tab6: show_df(items,"Flags",h=460)
+    with tab6: show_df(items,"Flags",height=460,key="td6")
 
 def render_members(items):
     mems=defaultdict(lambda:{"items":[],"done":0,"spill":0,"over":0,"block":0,"logged":0,"est":0})
@@ -1043,7 +1059,7 @@ def render_members(items):
     cols=st.columns(min(len(sorted_m),4))
     for idx,(name,data) in enumerate(sorted_m):
         col=cols[idx%4]; total=len(data["items"])
-        pct=int(data["done"]/total*100) if total else 0
+        pct=min(round(data["logged"]/data["est"]*100),100) if data["est"]>0 else 0
         bar_c="#16a34a" if pct>=80 else "#d97706" if pct>=50 else "#dc2626"
         has_spill=data["spill"]>0; has_block=data["block"]>0
         border_c="#dc2626" if has_spill else "#7c3aed" if has_block else "#e5e7eb"
@@ -1051,7 +1067,8 @@ def render_members(items):
             st.markdown(
                 f'<div style="background:#ffffff;border:2px solid {border_c};border-radius:10px;padding:16px;margin-bottom:12px">'
                 f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
-                f'<div style="width:36px;height:36px;border-radius:50%;background:{"#fef2f2" if has_spill else "#f5f3ff" if has_block else "#f1f5f9"};'
+                f'<div style="width:36px;height:36px;border-radius:50%;'
+                f'background:{"#fef2f2" if has_spill else "#f5f3ff" if has_block else "#f1f5f9"};'
                 f'border:2px solid {border_c};display:flex;align-items:center;justify-content:center;'
                 f'font-size:12px;font-weight:800;color:{border_c}">{inits(name)}</div>'
                 f'<div><div style="font-size:14px;font-weight:700;color:#1a202c">{name}</div>'
@@ -1062,36 +1079,49 @@ def render_members(items):
                 f'<div style="background:#fff7ed;border-radius:6px;padding:6px"><div style="font-size:18px;font-weight:800;color:#ea580c">{data["over"]}</div><div style="font-size:10px;color:#6b7280;font-weight:600">OVER</div></div>'
                 f'<div style="background:#f5f3ff;border-radius:6px;padding:6px"><div style="font-size:18px;font-weight:800;color:#7c3aed">{data["block"]}</div><div style="font-size:10px;color:#6b7280;font-weight:600">BLOCK</div></div>'
                 f'</div>'
-                f'<div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:4px">{pct}% COMPLETE · {data["est"]:.0f}h est</div>'
+                f'<div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:4px">'
+                f'{pct}% COMPLETE (hours) · {data["est"]:.0f}h est</div>'
                 f'<div style="background:#f3f4f6;border-radius:4px;height:5px;overflow:hidden">'
                 f'<div style="width:{pct}%;height:100%;background:{bar_c};border-radius:4px"></div></div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+                f'</div>',unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────
 def main():
-    for k,v in [("view","alert_center"),("selected_team",TEAMS[0]),("use_demo",True),
+    for k,v in [("view","alert_center"),("selected_team",TEAMS[0]),("use_demo",False),
                 ("loaded",False),("all_data",[]),("show_connect",False),("show_nine_box",False),
                 ("org_url","https://dev.azure.com/YOUR_ORG"),("project","HRM"),("pat","")]:
         if k not in st.session_state: st.session_state[k]=v
 
     render_sidebar()
 
+    # Auto-load from secrets if PAT available and not yet loaded
+    if st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url","") and not st.session_state.get("loaded"):
+        st.session_state["use_demo"] = False
+
     if not st.session_state["loaded"]:
         if st.session_state.get("use_demo"):
             with st.spinner("Loading demo data…"):
                 st.session_state["all_data"]=gen_demo(); st.session_state["loaded"]=True
-        elif st.session_state.get("pat"):
+        elif st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url",""):
             prog=st.progress(0,"Connecting to Azure DevOps…"); all_data=[]
             for idx,team in enumerate(TEAMS):
                 prog.progress((idx+1)/len(TEAMS),f"Loading {team}…")
-                all_data.append(load_team(st.session_state["org_url"],st.session_state["project"],st.session_state["pat"],team))
+                all_data.append(load_team(st.session_state["org_url"],
+                                          st.session_state["project"],
+                                          st.session_state["pat"],team))
             st.session_state["all_data"]=all_data; st.session_state["loaded"]=True; prog.empty()
         else:
-            st.markdown('<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;text-align:center"><div style="font-size:56px;margin-bottom:20px">🚨</div><div style="font-size:28px;font-weight:800;color:#1a202c;margin-bottom:8px">Sprint Alert Center</div><div style="font-size:15px;color:#6b7280;line-height:1.7">Connect your Azure DevOps via the sidebar<br>or load demo data to explore.</div></div>',unsafe_allow_html=True)
+            st.markdown(
+                '<div style="display:flex;flex-direction:column;align-items:center;'
+                'justify-content:center;min-height:70vh;text-align:center">'
+                '<div style="font-size:56px;margin-bottom:20px">🚨</div>'
+                '<div style="font-size:28px;font-weight:800;color:#1a202c;margin-bottom:8px">Sprint Alert Center</div>'
+                '<div style="font-size:15px;color:#6b7280;line-height:1.7">'
+                'Configure your Azure DevOps connection in Streamlit Secrets,<br>'
+                'or use the sidebar to connect manually.'
+                '</div></div>',unsafe_allow_html=True)
             _,cc,_=st.columns([3,2,3])
             with cc:
                 if st.button("🧪 Load Demo Data",use_container_width=True):
@@ -1100,7 +1130,8 @@ def main():
 
     all_data=st.session_state["all_data"]
     view=st.session_state["view"]
-    if view=="alert_center": render_alert_center(all_data)
+    if view=="alert_center":
+        render_alert_center(all_data)
     elif view=="team_detail":
         sel=st.session_state.get("selected_team",TEAMS[0])
         td=next((t for t in all_data if t["team"]==sel),None)
