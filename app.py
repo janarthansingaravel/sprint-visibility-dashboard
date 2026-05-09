@@ -923,27 +923,22 @@ def render_nine_box(all_data):
 
     fig.update_layout(
         height=420,
-        margin=dict(l=50, r=20, t=40, b=50),
+        margin=dict(l=50, r=20, t=50, b=50),
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
+        title_text="Member Performance Nine-Box · All Teams",
+        title_x=0.01,
         xaxis=dict(
             title="Sprint Completion %",
             range=[0, 100], dtick=25,
             showgrid=False, zeroline=False,
-            tickfont=dict(size=10, family="Inter"),
-            titlefont=dict(size=11, family="Inter", color="#64748b"),
+            tickfont=dict(size=10),
         ),
         yaxis=dict(
-            title="Risk Score (Spill + Overburn + Blocked)",
+            title="Risk Score",
             range=[0, 100], dtick=33,
             showgrid=False, zeroline=False,
-            tickfont=dict(size=10, family="Inter"),
-            titlefont=dict(size=11, family="Inter", color="#64748b"),
-        ),
-        title=dict(
-            text="Member Performance Nine-Box · All Teams",
-            font=dict(size=14, family="Inter", color="#0f172a"),
-            x=0.01, xanchor="left",
+            tickfont=dict(size=10),
         ),
     )
 
