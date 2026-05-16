@@ -333,8 +333,7 @@ class DevOpsClient:
         q = f"""SELECT [System.Id] FROM WorkItems
                 WHERE [System.TeamProject] = '{proj}'
                 AND [System.WorkItemType] = 'Feature'
-                AND [Custom.PI] = '{pi_name}'
-                ORDER BY [Custom.PIPriorityNo] ASC"""
+                AND [Custom.PI] = '{pi_name}'"""
         ids = self._wiql(proj, q)
         if not ids:
             return []
