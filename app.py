@@ -355,6 +355,8 @@ class DevOpsClient:
             "Custom.ScrumTeamOwnership",
             "Custom.PlannedDevEffort",
             "Custom.PlannedQAEffort",
+            "Custom.SolutionOwner",
+            "Custom.DependantScrumTeam",
         ]
         return self.get_wi_batch(ids, fields)
 
@@ -1138,7 +1140,9 @@ def render_pi_tab(pi_data, all_sprint_data):
                 if feat_ids2:
                     sample2 = cl2.get_wi_batch(feat_ids2[:1], [
                         "System.Id","System.Title","System.State",
-                        "Custom.PI","Custom.ScrumTeamOwnership","Custom.PlannedDevEffort"
+                        "Custom.PI","Custom.ScrumTeamOwnership",
+                        "Custom.PlannedDevEffort","Custom.PlannedQAEffort",
+                        "Custom.SolutionOwner","Custom.DependantScrumTeam",
                     ])
                     if sample2:
                         st.json(sample2[0].get("fields",{}))
@@ -2232,10 +2236,6 @@ def main():
 
     all_data = st.session_state["all_data"]
     pi_data  = st.session_state.get("pi_data", {})
-
-    # Show debug info if available
-    if st.session_state.get("pi_debug"):
-        st.warning(f"🔍 {st.session_state['pi_debug']}")
 
     # ── TABS: PI first, Sprint second ──
     tab_pi, tab_sprint = st.tabs(["🚀  PI Execution Centre", "📊  Sprint Monitor"])
