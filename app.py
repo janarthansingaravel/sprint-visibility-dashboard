@@ -368,6 +368,10 @@ class DevOpsClient:
             "Microsoft.VSTS.Common.Priority",
             "Custom.PI", "Custom.PIName", "Custom.ProgramIncrement",
             "Custom.PIPriorityNo", "Custom.POLevelPriority",
+            "Custom.ScrumTeamOwnership", "Custom.SolutionOwner",
+            "Custom.DependantScrumTeam",
+            "Custom.PlannedDevEffort", "Custom.PlannedQAEffort",
+            "Custom.Dev", "Custom.QA",
         ]
         return self.get_wi_batch(ids, fields)
 
@@ -614,21 +618,47 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
             continue
         af       = fields.get("System.AssignedTo", {})
         assignee = af.get("displayName", "Unassigned") if isinstance(af, dict) else str(af or "Unassigned")
+        # Extract planned effort — try multiple possible field names
+        def _ef(flds, *keys):
+            for k in keys:
+                v = flds.get(k)
+                if v is not None:
+                    try: return float(v)
+                    except: pass
+            return 0.0
+        pdev = _ef(fields, "Custom.PlannedDevEffort", "Custom.Dev")
+        pqa  = _ef(fields, "Custom.PlannedQAEffort",  "Custom.QA")
+        # Scrum team ownership
+        st_raw = fields.get("Custom.ScrumTeamOwnership", "") or ""
+        # Normalise to our known team names
+        scrum_team = st_raw.strip() if st_raw else "—"
+        dep_raw = fields.get("Custom.DependantScrumTeam", "") or ""
+        dep_team = dep_raw.strip() if dep_raw else "—"
+        sol_owner_raw = fields.get("Custom.SolutionOwner", {})
+        if isinstance(sol_owner_raw, dict):
+            sol_owner = sol_owner_raw.get("displayName", "—")
+        else:
+            sol_owner = str(sol_owner_raw) if sol_owner_raw else "—"
         feat_obj = {
-            "id":          f.get("id"),
-            "title":       fields.get("System.Title", ""),
-            "state":       raw_state,
-            "status":      consolidated,
-            "assignee":    assignee,
-            "priority":    fields.get("Microsoft.VSTS.Common.Priority", 99),
-            "pi_priority": fields.get("Custom.PIPriorityNo", 0),
-            "po_priority": fields.get("Custom.POLevelPriority", 0),
-            "tags":        fields.get("System.Tags", "") or "",
-            "area":        fields.get("System.AreaPath", ""),
-            "project":     "HRM",
-            "start_date":  pd_(fields.get("Microsoft.VSTS.Scheduling.StartDate")),
-            "end_date":    pd_(fields.get("Microsoft.VSTS.Scheduling.TargetDate")),
-            "devops_url":  f"{org}/HRM/_workitems/edit/{f.get('id')}",
+            "id":             f.get("id"),
+            "title":          fields.get("System.Title", ""),
+            "state":          raw_state,
+            "status":         consolidated,
+            "assignee":       assignee,
+            "priority":       fields.get("Microsoft.VSTS.Common.Priority", 99),
+            "pi_priority":    fields.get("Custom.PIPriorityNo", 0) or 0,
+            "po_priority":    fields.get("Custom.POLevelPriority", 0) or 0,
+            "tags":           fields.get("System.Tags", "") or "",
+            "area":           fields.get("System.AreaPath", ""),
+            "project":        "HRM",
+            "start_date":     pd_(fields.get("Microsoft.VSTS.Scheduling.StartDate")),
+            "end_date":       pd_(fields.get("Microsoft.VSTS.Scheduling.TargetDate")),
+            "devops_url":     f"{org}/HRM/_workitems/edit/{f.get('id')}",
+            "scrum_team":     scrum_team,
+            "dep_team":       dep_team,
+            "solution_owner": sol_owner,
+            "pdev":           pdev,
+            "pqa":            pqa,
             "est": 0, "done": 0, "rem": 0,
             "task_count": 0, "done_count": 0,
         }
@@ -758,15 +788,15 @@ def gen_demo_sprint():
 def gen_demo_pi():
     today = date.today()
     features = [
-        {"id": 110001, "title": "Employee Info Module v2",  "state": "Dev In Progress",     "status": "Development",     "assignee": "Team A", "priority": 1, "pi_priority": 1,  "po_priority": 2,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,3,31), "est": 320, "done": 290, "rem": 30,  "task_count": 18, "done_count": 15, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110001", "tags": "26R1", "area": "HRM\\Echo Engineers"},
-        {"id": 110002, "title": "Payroll Engine",            "state": "QA In Progress",      "status": "Testing",         "assignee": "Team B", "priority": 1, "pi_priority": 2,  "po_priority": 1,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,5,15), "est": 480, "done": 200, "rem": 340, "task_count": 24, "done_count": 10, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110002", "tags": "26R1", "area": "HRM\\Code Commanders"},
-        {"id": 110003, "title": "Leave Management",          "state": "QA Pending",          "status": "Testing",         "assignee": "Team C", "priority": 2, "pi_priority": 3,  "po_priority": 3,  "project": "HRM",        "start_date": date(2026,2,1),  "end_date": date(2026,5,22), "est": 280, "done": 170, "rem": 150, "task_count": 16, "done_count": 9,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110003", "tags": "26R1", "area": "HRM\\Beta Brigade"},
-        {"id": 110004, "title": "Performance Portal",        "state": "Dev Completed",       "status": "Development",     "assignee": "Team D", "priority": 2, "pi_priority": 4,  "po_priority": 4,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,5,15), "est": 240, "done": 220, "rem": 10,  "task_count": 14, "done_count": 13, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110004", "tags": "26R1", "area": "HRM\\Gamma Guardians"},
-        {"id": 110005, "title": "Recruitment Flow",          "state": "Dev In Progress",     "status": "Development",     "assignee": "Team E", "priority": 2, "pi_priority": 5,  "po_priority": 5,  "project": "HRM",        "start_date": date(2026,2,15), "end_date": date(2026,6,5),  "est": 360, "done": 136, "rem": 280, "task_count": 20, "done_count": 7,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110005", "tags": "26R1", "area": "HRM\\Hyper Hackers"},
-        {"id": 110007, "title": "Reporting Module",          "state": "Dev In Progress",     "status": "Development",     "assignee": "Team A", "priority": 3, "pi_priority": 7,  "po_priority": 7,  "project": "HRM",        "start_date": date(2026,3,15), "end_date": date(2026,6,5),  "est": 180, "done": 90,  "rem": 110, "task_count": 10, "done_count": 5,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110007", "tags": "26R1", "area": "HRM\\Echo Engineers"},
-        {"id": 110008, "title": "Data Migration Scripts",   "state": "Release Ready",        "status": "Release Ready",   "assignee": "Team B", "priority": 1, "pi_priority": 8,  "po_priority": 3,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,4,30), "est": 120, "done": 118, "rem": 0,   "task_count": 8,  "done_count": 8,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110008", "tags": "26R1", "area": "HRM\\Code Commanders"},
-        {"id": 110009, "title": "SSO Integration",           "state": "Done",                "status": "Done",            "assignee": "Team C", "priority": 2, "pi_priority": 9,  "po_priority": 8,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,3,15), "est": 160, "done": 158, "rem": 0,   "task_count": 10, "done_count": 10, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110009", "tags": "26R1", "area": "HRM\\Beta Brigade"},
-        {"id": 110010, "title": "Mobile App Revamp",         "state": "On hold",             "status": "On Hold",         "assignee": "Team D", "priority": 3, "pi_priority": 10, "po_priority": 9,  "project": "HRM",        "start_date": date(2026,4,1),  "end_date": date(2026,6,5),  "est": 260, "done": 40,  "rem": 240, "task_count": 15, "done_count": 2,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110010", "tags": "26R1", "area": "HRM\\Gamma Guardians"},
+        {"id": 110001, "title": "Employee Info Module v2",  "state": "Dev In Progress",     "status": "Development",     "assignee": "Team A", "priority": 1, "pi_priority": 1,  "po_priority": 2,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,3,31), "est": 320, "done": 290, "rem": 30,  "task_count": 18, "done_count": 15, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110001", "tags": "26R1", "area": "HRM\\Echo Engineers", "scrum_team": "Echo Engineers",  "dep_team": "—",             "solution_owner": "Aravinda K.", "pdev": 280, "pqa": 60, "scrum_team": "Echo Engineers", "dep_team": "—", "solution_owner": "Aravinda K.", "pdev": 280, "pqa": 60},
+        {"id": 110002, "title": "Payroll Engine",            "state": "QA In Progress",      "status": "Testing",         "assignee": "Team B", "priority": 1, "pi_priority": 2,  "po_priority": 1,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,5,15), "est": 480, "done": 200, "rem": 340, "task_count": 24, "done_count": 10, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110002", "tags": "26R1", "area": "HRM\\Code Commanders", "scrum_team": "Code Commanders", "dep_team": "Echo Engineers", "solution_owner": "Kasun B.", "pdev": 350, "pqa": 80},
+        {"id": 110003, "title": "Leave Management",          "state": "QA Pending",          "status": "Testing",         "assignee": "Team C", "priority": 2, "pi_priority": 3,  "po_priority": 3,  "project": "HRM",        "start_date": date(2026,2,1),  "end_date": date(2026,5,22), "est": 280, "done": 170, "rem": 150, "task_count": 16, "done_count": 9,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110003", "tags": "26R1", "area": "HRM\\Beta Brigade", "scrum_team": "Beta Brigade", "dep_team": "—", "solution_owner": "Sharini N.", "pdev": 200, "pqa": 60},
+        {"id": 110004, "title": "Performance Portal",        "state": "Dev Completed",       "status": "Development",     "assignee": "Team D", "priority": 2, "pi_priority": 4,  "po_priority": 4,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,5,15), "est": 240, "done": 220, "rem": 10,  "task_count": 14, "done_count": 13, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110004", "tags": "26R1", "area": "HRM\\Gamma Guardians", "scrum_team": "Gamma Guardians", "dep_team": "—", "solution_owner": "Nadia R.", "pdev": 180, "pqa": 50},
+        {"id": 110005, "title": "Recruitment Flow",          "state": "Dev In Progress",     "status": "Development",     "assignee": "Team E", "priority": 2, "pi_priority": 5,  "po_priority": 5,  "project": "HRM",        "start_date": date(2026,2,15), "end_date": date(2026,6,5),  "est": 360, "done": 136, "rem": 280, "task_count": 20, "done_count": 7,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110005", "tags": "26R1", "area": "HRM\\Hyper Hackers", "scrum_team": "Hyper Hackers", "dep_team": "Code Commanders", "solution_owner": "Janaka K.", "pdev": 260, "pqa": 80},
+        {"id": 110007, "title": "Reporting Module",          "state": "Dev In Progress",     "status": "Development",     "assignee": "Team A", "priority": 3, "pi_priority": 7,  "po_priority": 7,  "project": "HRM",        "start_date": date(2026,3,15), "end_date": date(2026,6,5),  "est": 180, "done": 90,  "rem": 110, "task_count": 10, "done_count": 5,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110007", "tags": "26R1", "area": "HRM\\Echo Engineers", "scrum_team": "Echo Engineers", "dep_team": "—", "solution_owner": "Chamod B.", "pdev": 140, "pqa": 40},
+        {"id": 110008, "title": "Data Migration Scripts",   "state": "Release Ready",        "status": "Release Ready",   "assignee": "Team B", "priority": 1, "pi_priority": 8,  "po_priority": 3,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,4,30), "est": 120, "done": 118, "rem": 0,   "task_count": 8,  "done_count": 8,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110008", "tags": "26R1", "area": "HRM\\Code Commanders", "scrum_team": "Code Commanders", "dep_team": "—", "solution_owner": "Praveena G.", "pdev": 80, "pqa": 20},
+        {"id": 110009, "title": "SSO Integration",           "state": "Done",                "status": "Done",            "assignee": "Team C", "priority": 2, "pi_priority": 9,  "po_priority": 8,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,3,15), "est": 160, "done": 158, "rem": 0,   "task_count": 10, "done_count": 10, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110009", "tags": "26R1", "area": "HRM\\Beta Brigade", "scrum_team": "Beta Brigade", "dep_team": "—", "solution_owner": "Sammani E.", "pdev": 100, "pqa": 40},
+        {"id": 110010, "title": "Mobile App Revamp",         "state": "On hold",             "status": "On Hold",         "assignee": "Team D", "priority": 3, "pi_priority": 10, "po_priority": 9,  "project": "HRM",        "start_date": date(2026,4,1),  "end_date": date(2026,6,5),  "est": 260, "done": 40,  "rem": 240, "task_count": 15, "done_count": 2,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110010", "tags": "26R1", "area": "HRM\\Gamma Guardians", "scrum_team": "Gamma Guardians", "dep_team": "Code Commanders", "solution_owner": "Chen W.", "pdev": 180, "pqa": 60},
     ]
     return {
         "pi_name": "26R1",
@@ -854,373 +884,523 @@ def build_excel(all_data):
 
 
 # ─────────────────────────────────────────────────────────────────
-# PI EXECUTION CENTRE — RENDER
+# PI FEATURE CHILD TASK LOADER
+# ─────────────────────────────────────────────────────────────────
+COMPLETED_STATES = ["Done", "Resolved", "Dev Completed"]
+
+# Activities that count — Documentation/DevOps excluded
+DEV_ACTIVITIES = {"Development"}
+QA_ACTIVITIES  = {"Testing"}
+
+# Completed feature states for team box calculation
+FEATURE_COMPLETED_STATES = {
+    "Release Materials Pending", "Release Materials In-Progress",
+    "Release Materials Completed", "Release Ready", "Done"
+}
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_feature_tasks(org, pat, feature_ids):
+    """Load all child tasks/bugs for a list of feature IDs and compute effort metrics."""
+    if not feature_ids:
+        return {}
+    cl = DevOpsClient(org, pat)
+    # Fetch all child items via WIQL
+    id_list = ", ".join(str(i) for i in feature_ids)
+    q = f"""SELECT [System.Id] FROM WorkItems
+            WHERE [System.TeamProject] = 'HRM'
+            AND [System.WorkItemType] IN ('Task','Bug')
+            AND [System.Parent] IN ({id_list})"""
+    task_ids = cl._wiql("HRM", q)
+    if not task_ids:
+        return {fid: {"tasks": [], "dev_actual": 0, "qa_actual": 0, "bug_count": 0} for fid in feature_ids}
+
+    raw = cl.get_wi_batch(task_ids, [
+        "System.Id", "System.Title", "System.WorkItemType", "System.State",
+        "System.AssignedTo", "System.Parent",
+        "Microsoft.VSTS.Common.Activity",
+        "Microsoft.VSTS.Scheduling.OriginalEstimate",
+        "Microsoft.VSTS.Scheduling.CompletedWork",
+        "Microsoft.VSTS.Scheduling.RemainingWork",
+    ])
+
+    # Group by parent feature
+    result = {fid: {"tasks": [], "dev_actual": 0, "qa_actual": 0, "bug_count": 0} for fid in feature_ids}
+    for wi in raw:
+        f = wi.get("fields", {})
+        parent_id = f.get("System.Parent")
+        if parent_id not in result:
+            continue
+        wi_type  = f.get("System.WorkItemType", "")
+        activity = f.get("Microsoft.VSTS.Common.Activity", "") or ""
+        state    = f.get("System.State", "")
+        est      = f.get("Microsoft.VSTS.Scheduling.OriginalEstimate") or 0
+        done     = f.get("Microsoft.VSTS.Scheduling.CompletedWork") or 0
+        rem      = f.get("Microsoft.VSTS.Scheduling.RemainingWork") or 0
+        af       = f.get("System.AssignedTo", {})
+        assignee = af.get("displayName", "Unassigned") if isinstance(af, dict) else str(af or "Unassigned")
+
+        task_obj = {
+            "id":       wi.get("id"),
+            "title":    f.get("System.Title", ""),
+            "type":     wi_type,
+            "state":    state,
+            "assignee": assignee,
+            "activity": activity,
+            "est":      est,
+            "done":     done,
+            "rem":      rem,
+            "actual":   round(done + rem, 1),
+            "devops_url": f"{st.session_state.get('org_url','')}/HRM/_workitems/edit/{wi.get('id')}",
+        }
+        result[parent_id]["tasks"].append(task_obj)
+
+        # Effort calculations — exclude Documentation/DevOps
+        if wi_type == "Bug":
+            result[parent_id]["bug_count"] += 1
+            # Bugs count as Dev effort
+            result[parent_id]["dev_actual"] = round(result[parent_id]["dev_actual"] + done + rem, 1)
+        elif activity in DEV_ACTIVITIES:
+            result[parent_id]["dev_actual"] = round(result[parent_id]["dev_actual"] + done + rem, 1)
+        elif activity in QA_ACTIVITIES:
+            result[parent_id]["qa_actual"]  = round(result[parent_id]["qa_actual"]  + done + rem, 1)
+        # Documentation, DevOps, etc. → excluded
+
+    return result
+
+
+def build_feature_excel(features, task_data):
+    """Build Excel export for feature list with tasks."""
+    feat_rows = []
+    for f in features:
+        td = task_data.get(f["id"], {})
+        odev = round(td.get("dev_actual", 0) - f.get("pdev", 0), 1)
+        oqa  = round(td.get("qa_actual", 0)  - f.get("pqa", 0), 1)
+        feat_rows.append({
+            "PI Priority #":      f.get("pi_priority", ""),
+            "Feature ID":         f.get("id", ""),
+            "Title":              f.get("title", ""),
+            "State":              f.get("state", ""),
+            "Solution Owner":     f.get("solution_owner", ""),
+            "Scrum Team":         f.get("scrum_team", ""),
+            "Dependent Team":     f.get("dep_team", ""),
+            "Planned Dev (h)":    f.get("pdev", 0),
+            "Actual Dev (h)":     td.get("dev_actual", 0),
+            "Overrun Dev (h)":    max(odev, 0),
+            "Planned QA (h)":     f.get("pqa", 0),
+            "Actual QA (h)":      td.get("qa_actual", 0),
+            "Overrun QA (h)":     max(oqa, 0),
+            "Total Bugs":         td.get("bug_count", 0),
+            "DevOps URL":         f.get("devops_url", ""),
+        })
+    buf = BytesIO()
+    pd.DataFrame(feat_rows).to_excel(buf, index=False, sheet_name="Feature Board")
+    buf.seek(0)
+    return buf
+
+
+def build_task_excel(feature, tasks):
+    """Build Excel for tasks under a single feature."""
+    rows = []
+    for t in tasks:
+        if t.get("activity") in ("Documentation",) or (t.get("activity") not in DEV_ACTIVITIES and t.get("activity") not in QA_ACTIVITIES and t.get("type") != "Bug"):
+            pass  # include all tasks in download even if excluded from calcs
+        rows.append({
+            "Item ID":   t.get("id"),
+            "Type":      t.get("type"),
+            "Title":     t.get("title"),
+            "Assignee":  t.get("assignee"),
+            "Activity":  t.get("activity"),
+            "State":     t.get("state"),
+            "Est (h)":   t.get("est", 0),
+            "Done (h)":  t.get("done", 0),
+            "Rem (h)":   t.get("rem", 0),
+            "Actual (h)":t.get("actual", 0),
+        })
+    buf = BytesIO()
+    pd.DataFrame(rows).to_excel(buf, index=False, sheet_name=f"Tasks_{feature['id']}")
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────────────────────────
+# PI EXECUTION CENTRE — FULL RENDER (new version)
 # ─────────────────────────────────────────────────────────────────
 def render_pi_tab(pi_data, all_sprint_data):
-    features   = pi_data.get("features", [])
-    pi_name    = pi_data.get("pi_name", "—")
-    pi_start   = pi_data.get("pi_start")
-    pi_end     = pi_data.get("pi_end")
-    total_wd   = pi_data.get("total_working_days", 0)
-    remain_wd  = pi_data.get("remaining_working_days", 0)
-    elapsed_wd = total_wd - remain_wd
+    features  = pi_data.get("features", [])
+    pi_name   = pi_data.get("pi_name", "—")
+    pi_start  = pi_data.get("pi_start")
+    pi_end    = pi_data.get("pi_end")
+    total_wd  = pi_data.get("total_working_days", 0)
+    remain_wd = pi_data.get("remaining_working_days", 0)
 
-    # Aggregate sprint data
-    all_items     = [i for td in all_sprint_data for i in td.get("items", [])]
-    total_est     = sum(i.get("est", 0) or 0 for i in all_items)
-    total_done    = sum(i.get("done", 0) or 0 for i in all_items)
-    comp_pct      = min(round(total_done / total_est * 100), 100) if total_est > 0 else 0
-    spill_high    = [i for i in all_items if i.get("spill_risk") == "high"]
-    spill_watch   = [i for i in all_items if i.get("spill_risk") == "watch"]
-    overburn_all  = [i for i in all_items if i.get("is_overburn")]
-    blocked_all   = [i for i in all_items if i.get("is_blocked")]
+    # ── Sprint-level aggregates ──
+    all_items    = [i for td in all_sprint_data for i in td.get("items", [])]
+    total_est    = sum(i.get("est", 0) or 0 for i in all_items)
+    total_done   = sum(i.get("done", 0) or 0 for i in all_items)
+    comp_pct     = min(round(total_done / total_est * 100), 100) if total_est > 0 else 0
+    spill_high   = [i for i in all_items if i.get("spill_risk") == "high"]
+    spill_watch  = [i for i in all_items if i.get("spill_risk") == "watch"]
+    overburn_all = [i for i in all_items if i.get("is_overburn")]
+    blocked_all  = [i for i in all_items if i.get("is_blocked")]
 
-    # Feature stats
-    feat_done     = [f for f in features if f["status"] == "Done"]
-    feat_atrisk   = [f for f in features if f["status"] in ["On Hold", "Blocked by Dependent Bugs"]]
-    feat_dev      = [f for f in features if f["status"] == "Development"]
-    feat_test     = [f for f in features if f["status"] == "Testing"]
-    feat_total_est  = sum(f.get("est", 0) for f in features)
-    feat_total_done = sum(f.get("done", 0) for f in features)
-    feat_comp_pct   = min(round(feat_total_done / feat_total_est * 100), 100) if feat_total_est > 0 else 0
+    # ── Feature-level aggregates ──
+    feat_done_count = sum(1 for f in features if f["status"] == "Done")
+    feat_atrisk     = [f for f in features if f["status"] in ["On Hold", "Blocked by Dependent Bugs"]]
+    score = max(0, min(100, round(
+        100 - len(spill_high)*3 - len(spill_watch)*1
+            - len(blocked_all)*2 - len(feat_atrisk)*4
+            - max(0, 40 - comp_pct) * 0.5
+    )))
+    score_color  = "#16a34a" if score >= 75 else "#d97706" if score >= 50 else "#dc2626"
+    overall_hlth = "critical" if score < 50 else "atrisk" if score < 70 else "watch" if score < 85 else "healthy"
+    os_ = STATUS[overall_hlth]
 
-    # PI Confidence score (weighted)
-    score = 100
-    if total_est > 0:
-        score -= max(0, 40 - comp_pct) * 0.5
-    score -= len(spill_high) * 3
-    score -= len(spill_watch) * 1
-    score -= len(blocked_all) * 2
-    score -= len(feat_atrisk) * 4
-    score = max(0, min(100, round(score)))
-    score_color = "#16a34a" if score >= 75 else "#d97706" if score >= 50 else "#dc2626"
+    # ── Load child task data (live or cached) ──
+    org = st.session_state.get("org_url", "")
+    pat = st.session_state.get("pat", "")
+    feat_ids = [f["id"] for f in features]
+    if pat and "YOUR_ORG" not in org and feat_ids:
+        task_data = load_feature_tasks(org, pat, feat_ids)
+    else:
+        task_data = {f["id"]: {"tasks": [], "dev_actual": 0, "qa_actual": 0, "bug_count": 0} for f in features}
+
+    # ── Session state for filters ──
+    if "pi_status_filter" not in st.session_state: st.session_state["pi_status_filter"] = None
+    if "pi_team_filter"   not in st.session_state: st.session_state["pi_team_filter"]   = None
+    if "pi_active_tab"    not in st.session_state: st.session_state["pi_active_tab"]    = "board"
+    if "pi_expanded_feat" not in st.session_state: st.session_state["pi_expanded_feat"] = None
+    if "pi_sort_col"      not in st.session_state: st.session_state["pi_sort_col"]      = "pi_priority"
+    if "pi_sort_asc"      not in st.session_state: st.session_state["pi_sort_asc"]      = True
 
     # ── HEADER ──
     date_str = f"{pi_start.strftime('%d %b %Y')} → {pi_end.strftime('%d %b %Y')}" if pi_start and pi_end else "—"
-    overall_health = "healthy"
-    for td in all_sprint_data:
-        h = td.get("health", "no_data")
-        if h == "critical": overall_health = "critical"; break
-        if h == "atrisk" and overall_health != "critical": overall_health = "atrisk"
-        if h == "watch" and overall_health not in ["critical", "atrisk"]: overall_health = "watch"
-
     st.markdown(f"""
-    <div style="background:#ffffff;border-bottom:1px solid #e8ecf0;padding:14px 24px;
+    <div style="background:#ffffff;border-bottom:1px solid #e8ecf0;padding:12px 20px;
          display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <div>
-        <div style="font-size:20px;font-weight:800;color:#1a202c">
-          🚀 PI Execution Centre &nbsp;
-          <span style="font-size:14px;font-weight:600;color:#2563eb;background:#eff6ff;
-            border:1px solid #bfdbfe;border-radius:6px;padding:2px 10px">{pi_name}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px;font-weight:700;color:#1a202c">🚀 PI Execution Centre</span>
+          <span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:6px;
+            padding:2px 10px;font-size:12px;font-weight:600">{pi_name}</span>
+          <span style="background:{os_['bg']};color:{os_['color']};border:1px solid {os_['border']};
+            border-radius:20px;padding:2px 10px;font-size:11px;font-weight:700">{os_['icon']} {os_['text'].upper()}</span>
         </div>
-        <div style="font-size:12px;color:#6b7280;margin-top:3px">
+        <div style="font-size:11px;color:#6b7280;margin-top:3px">
           {date_str} &nbsp;·&nbsp; {total_wd} working days total &nbsp;·&nbsp;
           <span style="color:#dc2626;font-weight:600">{remain_wd} days remaining</span>
-          &nbsp;·&nbsp; HRM Project
-          &nbsp;·&nbsp; Updated: {datetime.now().strftime('%d %b %Y %H:%M')}
+          &nbsp;·&nbsp; HRM Project &nbsp;·&nbsp; Updated: {datetime.now().strftime('%d %b %Y %H:%M')}
         </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        {status_badge(overall_health)}
-        <div style="background:{score_color};color:#ffffff;border-radius:50%;width:48px;height:48px;
-             display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800">
-          <div style="font-size:16px;line-height:1">{score}</div>
-          <div style="font-size:8px;opacity:.85">SCORE</div>
-        </div>
+      <div style="background:{score_color};color:#fff;border-radius:50%;width:46px;height:46px;
+           display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">
+        <div style="font-size:16px;line-height:1">{score}</div>
+        <div style="font-size:8px;opacity:.85">SCORE</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── PI TIMELINE STRIP ──
-    sprints_meta = [
-        ("SP01", "Jan 6", "Jan 17", 100, True),
-        ("SP02", "Jan 20", "Jan 31", 100, True),
-        ("SP03", "Feb 3",  "Feb 14", 100, True),
-        ("SP04", "Feb 17", "Feb 28", 100, True),
-        ("SP05", "Apr 27", "May 8",  100 if remain_wd == 0 else 72, False),
-        ("SP06", "May 11", "May 22", comp_pct, False),
-        ("IP",   "May 25", "Jun 5",  0, False),
-    ]
-    pi_pct = round(elapsed_wd / total_wd * 100) if total_wd > 0 else 0
-    bars = ""
-    for name, s, e, pct, done in sprints_meta:
-        fill_color = "#16a34a" if done else ("#2563eb" if name == "SP06" else "#d97706")
-        border = "border:2px solid #2563eb;" if name == "SP06" else "border:1px solid #e8ecf0;"
-        bars += f"""<div style="flex:1;display:flex;flex-direction:column;gap:3px">
-          <div style="height:14px;background:#f3f4f6;border-radius:4px;overflow:hidden;{border}">
-            <div style="width:{pct}%;height:100%;background:{fill_color};border-radius:3px"></div></div>
-          <div style="font-size:9px;color:{'#2563eb' if name=='SP06' else '#6b7280'};text-align:center;font-weight:{'700' if name=='SP06' else '400'}">
-            {name}{' ✓' if done else ''}<br><span style="font-size:8px">{s}→{e}</span></div></div>"""
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    st.markdown(f"""
-    <div style="background:#ffffff;border:1px solid #e8ecf0;border-radius:10px;padding:14px 18px;margin:12px 24px 0">
-      <div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">
-        PI Timeline — {pi_name} &nbsp;·&nbsp; {pi_pct}% elapsed
-      </div>
-      <div style="display:flex;gap:4px">{bars}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── KPI ROW ──
+    # ── KPI METRICS ROW ──
     total_overrun = sum(i.get("overrun", 0) for i in overburn_all)
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    with k1:
-        st.markdown(metric_html("PI confidence", f"{score}/100",
-            "trending ↑" if score >= 70 else "trending ↓", score_color), unsafe_allow_html=True)
-    with k2:
-        st.markdown(metric_html("Feature completion", f"{feat_comp_pct}%",
-            f"{len(feat_done)} of {len(features)} done", "#2563eb"), unsafe_allow_html=True)
-    with k3:
-        st.markdown(metric_html("Sprint completion", f"{comp_pct}%",
-            f"{total_done:.0f}h / {total_est:.0f}h", "#059669"), unsafe_allow_html=True)
-    with k4:
-        st.markdown(metric_html("Spill risk items", str(len(spill_high) + len(spill_watch)),
-            f"{len(spill_high)} high · {len(spill_watch)} watch", "#dc2626"), unsafe_allow_html=True)
-    with k5:
-        st.markdown(metric_html("Overburn alerts", str(len(overburn_all)),
-            f"+{total_overrun:.0f}h projected", "#d97706"), unsafe_allow_html=True)
-    with k6:
-        st.markdown(metric_html("Blocked items", str(len(blocked_all)),
-            f"across {len(all_sprint_data)} teams", "#7c3aed"), unsafe_allow_html=True)
+    k1,k2,k3,k4,k5,k6 = st.columns(6)
+    with k1: st.metric("PI confidence",     f"{score}/100",  "trending ↑" if score>=70 else "trending ↓")
+    with k2: st.metric("Feature completion", f"{round(feat_done_count/len(features)*100) if features else 0}%", f"{feat_done_count} of {len(features)} done")
+    with k3: st.metric("Sprint completion",  f"{comp_pct}%", f"{total_done:.0f}h / {total_est:.0f}h")
+    with k4: st.metric("Spill risk items",   str(len(spill_high)+len(spill_watch)), f"{len(spill_high)} high · {len(spill_watch)} watch")
+    with k5: st.metric("Overburn alerts",    str(len(overburn_all)), f"+{total_overrun:.0f}h projected")
+    with k6: st.metric("Blocked items",      str(len(blocked_all)), "across 5 teams")
 
-    # ── MAIN CONTENT ──
-    main_col = st  # full width
-    if True:
-        # ── FEATURE COMMITMENT TRACKER ──
-        st.markdown(card_open(), unsafe_allow_html=True)
-        st.markdown(section_header("📋 PI Feature Commitment Tracker",
-            f"{len(features)} features · {pi_name}"), unsafe_allow_html=True)
+    st.markdown("---")
 
-        status_order = ["Done", "Release Ready", "Testing", "Development", "Release Materials",
-                        "PO Review", "Solutioning", "Grooming", "Feature Approval", "PI Ready",
-                        "On Hold", "Blocked by Dependent Bugs"]
-        sorted_feats = sorted(features, key=lambda x: (
-            status_order.index(x["status"]) if x["status"] in status_order else 99,
-            x.get("pi_priority", 99)
-        ))
+    # ── FEATURE STATUS BREAKDOWN ──
+    st.markdown('<div style="font-size:13px;font-weight:700;color:#1a202c;margin-bottom:10px">Feature status breakdown</div>',
+                unsafe_allow_html=True)
+    status_order = ["Done","Release Ready","Release Materials","PO Review","Testing","Development",
+                    "Solutioning","Grooming","Feature Approval","PI Ready","On Hold","Blocked by Dependent Bugs"]
+    status_counts = defaultdict(int)
+    for f in features:
+        status_counts[f["status"]] += 1
 
-        for f in sorted_feats:
-            est  = f.get("est", 0) or 0
-            done = f.get("done", 0) or 0
-            pct  = min(round(done / est * 100), 100) if est > 0 else 0
-            overburn = done > est and est > 0
-            bar_color = "#dc2626" if overburn else "#059669" if pct >= 80 else "#d97706" if pct >= 50 else "#2563eb"
-            end_str = f["end_date"].strftime("%d %b") if f.get("end_date") else "—"
-            late = f.get("end_date") and pi_end and f["end_date"] > pi_end
-
+    cols_s1 = st.columns(6)
+    cols_s2 = st.columns(6)
+    for idx, sname in enumerate(status_order):
+        count = status_counts.get(sname, 0)
+        sc    = PI_STATUS_COLORS.get(sname, {"bg":"#f9fafb","color":"#6b7280","border":"#e5e7eb"})
+        is_active = st.session_state["pi_status_filter"] == sname
+        border_style = f"2px solid {sc['color']}" if is_active else f"1px solid {sc['border']}"
+        col = (cols_s1 if idx < 6 else cols_s2)[idx % 6]
+        with col:
             st.markdown(f"""
-            <div style="display:flex;align-items:center;gap:10px;padding:7px 0;
-                 border-bottom:1px solid #f3f4f6;cursor:pointer" 
-                 onclick="window.open('{f['devops_url']}','_blank')">
-              <div style="min-width:24px;text-align:center;font-size:12px;font-weight:700;color:#9ca3af">
-                {f.get('pi_priority','—')}</div>
-              <div style="flex:1;min-width:0">
-                <div style="font-size:13px;font-weight:600;color:#1a202c;overflow:hidden;
-                     text-overflow:ellipsis;white-space:nowrap">{f['title']}</div>
-                <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
-                  {pi_status_badge(f['status'])}
-                  <span style="font-size:11px;color:#6b7280">Due: {end_str}</span>
-                  {f'<span style="font-size:10px;font-weight:700;color:#dc2626">⚠ PAST PI END</span>' if late else ''}
-                  {f'<span style="font-size:10px;font-weight:700;color:#d97706">🔥 OVERBURN</span>' if overburn else ''}
-                  <span style="font-size:10px;color:#9ca3af">{f.get("project","")}</span>
-                </div>
-              </div>
-              <div style="min-width:140px">
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7280">
-                  <span>{done:.0f}h / {est:.0f}h</span><span style="font-weight:600;color:{bar_color}">{pct}%</span></div>
-                {progress_bar(pct, bar_color, 5)}
-              </div>
-              <a href="{f['devops_url']}" target="_blank" 
-                 style="font-size:11px;color:#2563eb;text-decoration:none;white-space:nowrap">Open ↗</a>
-            </div>
-            """, unsafe_allow_html=True)
-        st.markdown(card_close(), unsafe_allow_html=True)
-
-        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
-        # ── TEAM PERFORMANCE + SPRINT TREND side by side ──
-        tc1, tc2 = st.columns(2)
-        with tc1:
-            st.markdown(card_open(), unsafe_allow_html=True)
-            st.markdown(section_header("👥 Team Delivery Performance"), unsafe_allow_html=True)
-            order = {"critical": 0, "atrisk": 1, "watch": 2, "healthy": 3, "no_data": 4}
-            sorted_teams = sorted(all_sprint_data, key=lambda x: order.get(x.get("health","no_data"),4))
-            for td in sorted_teams:
-                team  = td.get("team",""); health = td.get("health","no_data")
-                cp    = td.get("comp_pct",0); dl = td.get("days_left",0)
-                s     = STATUS[health]; av = TEAM_AVATARS.get(team,"🔷")
-                tc    = TEAM_COLORS.get(team,"#6b7280")
-                dl_c  = "#dc2626" if dl<=2 else "#d97706" if dl<=4 else "#6b7280"
-                # Clickable team row
-                btn_key = f"pi_team_{team}"
-                st.markdown(f"""
-                <div style="display:flex;align-items:center;gap:8px;padding:6px 0;
-                     border-bottom:1px solid #f3f4f6">
-                  <span style="font-size:16px">{av}</span>
-                  <div style="flex:1;min-width:0">
-                    <div style="display:flex;align-items:center;gap:6px">
-                      <span style="font-size:13px;font-weight:600">{team}</span>
-                      {status_badge(health)}
-                    </div>
-                    <div style="display:flex;align-items:center;gap:6px;margin-top:3px">
-                      {progress_bar(cp, tc, 5)}
-                    </div>
-                  </div>
-                  <div style="text-align:right;min-width:60px">
-                    <div style="font-size:14px;font-weight:700;color:{tc}">{cp}%</div>
-                    <div style="font-size:10px;color:{dl_c}">{dl}d left</div>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
-                if st.button(f"Expand {team}", key=btn_key, use_container_width=True):
-                    key_expanded = f"pi_expand_{team}"
-                    st.session_state[key_expanded] = not st.session_state.get(key_expanded, False)
-
-                # Inline expandable panel
-                if st.session_state.get(f"pi_expand_{team}", False):
-                    items = td.get("items", [])
-                    h_items = [i for i in items if i.get("spill_risk") == "high"]
-                    w_items = [i for i in items if i.get("spill_risk") == "watch"]
-                    o_items = [i for i in items if i.get("is_overburn")]
-                    b_items = [i for i in items if i.get("is_blocked")]
-                    te = sum(i.get("est",0) or 0 for i in items)
-                    td2= sum(i.get("done",0) or 0 for i in items)
-                    tr = sum(i.get("rem",0) or 0 for i in items)
-                    st.markdown(f"""
-                    <div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;
-                         padding:12px;margin:6px 0">
-                      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">
-                        <div style="text-align:center"><div style="font-size:18px;font-weight:800;color:#dc2626">{len(h_items)}</div><div style="font-size:10px;color:#6b7280">High Spill</div></div>
-                        <div style="text-align:center"><div style="font-size:18px;font-weight:800;color:#d97706">{len(w_items)}</div><div style="font-size:10px;color:#6b7280">Watch</div></div>
-                        <div style="text-align:center"><div style="font-size:18px;font-weight:800;color:#ea580c">{len(o_items)}</div><div style="font-size:10px;color:#6b7280">Overburn</div></div>
-                        <div style="text-align:center"><div style="font-size:18px;font-weight:800;color:#7c3aed">{len(b_items)}</div><div style="font-size:10px;color:#6b7280">Blocked</div></div>
-                      </div>
-                      <div style="font-size:11px;color:#6b7280">{te:.0f}h est · {td2:.0f}h done · {tr:.0f}h rem</div>
-                    """, unsafe_allow_html=True)
-                    risk_items = sorted(h_items + w_items, key=lambda x: 0 if x.get("spill_risk")=="high" else 1)[:5]
-                    for ri in risk_items:
-                        dot = "#dc2626" if ri.get("spill_risk")=="high" else "#d97706"
-                        st.markdown(f"""<div style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;
-                            border-top:1px solid #e8ecf0;font-size:11px">
-                          <div style="width:7px;height:7px;border-radius:50%;background:{dot};margin-top:3px;flex-shrink:0"></div>
-                          <div style="flex:1">{ri.get('title','')[:55]}<br>
-                            <span style="color:#9ca3af">{ri.get('state','')} · {ri.get('assignee','')}</span></div>
-                          <a href="{ri.get('devops_url','')}" target="_blank" style="color:#2563eb;font-size:10px">↗</a>
-                        </div>""", unsafe_allow_html=True)
-                    if st.button(f"Full sprint detail →", key=f"pi_full_{team}"):
-                        st.session_state.update({"active_tab": "sprint", "selected_team": team,
-                                                  "view": "team_detail"})
-                        st.rerun()
-
-            st.markdown(card_close(), unsafe_allow_html=True)
-
-        with tc2:
-            st.markdown(card_open(), unsafe_allow_html=True)
-            st.markdown(section_header("📈 Sprint Velocity Trend"), unsafe_allow_html=True)
-            # Velocity data per team per sprint (demo values — live would use historical API)
-            sprint_labels = ["SP01","SP02","SP03","SP04","SP05","SP06"]
-            vel_data = {
-                "Echo Engineers":   [14,12,10,11,9,10],
-                "Code Commanders":  [16,15,14,15,13,15],
-                "Beta Brigade":     [12,13,11,10,11,9],
-                "Gamma Guardians":  [18,17,19,18,17,17],
-                "Hyper Hackers":    [15,16,17,18,18,22],
-            }
-            max_vel = 25
-            for team, vals in vel_data.items():
-                tc = TEAM_COLORS.get(team,"#6b7280")
-                trend = vals[-1] - vals[0]
-                trend_txt = f"+{trend}" if trend > 0 else str(trend)
-                trend_c = "#16a34a" if trend > 0 else "#dc2626" if trend < 0 else "#6b7280"
-                bar_html = "".join([
-                    f'<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">'
-                    f'<div style="width:100%;height:{round(v/max_vel*44)}px;background:{tc};'
-                    f'opacity:{0.5+0.08*i};border-radius:2px 2px 0 0"></div>'
-                    f'<div style="font-size:8px;color:#9ca3af">{sprint_labels[i]}</div></div>'
-                    for i,v in enumerate(vals)
-                ])
-                av = TEAM_AVATARS.get(team,"")
-                st.markdown(f"""
-                <div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid #f3f4f6">
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                    <span style="font-size:12px;font-weight:600">{av} {team}</span>
-                    <span style="font-size:11px;color:{trend_c};font-weight:600">{trend_txt} items trend</span>
-                  </div>
-                  <div style="display:flex;align-items:flex-end;gap:2px;height:50px">{bar_html}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            st.markdown(card_close(), unsafe_allow_html=True)
-
-        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
-        # ── PREDICTIVE FORECAST + DEPENDENCY MATRIX ──
-        fc1, fc2 = st.columns(2)
-        with fc1:
-            st.markdown(card_open(), unsafe_allow_html=True)
-            st.markdown(section_header("🔭 Predictive Completion Forecast",
-                "Based on current velocity"), unsafe_allow_html=True)
-            for f in sorted_feats[:8]:
-                est  = f.get("est",0) or 0
-                done = f.get("done",0) or 0
-                rem  = f.get("rem",0) or 0
-                end_date = f.get("end_date")
-                if not end_date or est == 0:
-                    continue
-                # Simple forecast: at current burn rate, how many more days?
-                if done > 0 and est > 0:
-                    daily_rate = done / max(1, (total_wd - remain_wd))
-                    days_needed = round(rem / daily_rate) if daily_rate > 0 else 999
-                    forecast_date = date.today() + timedelta(days=round(days_needed * 7/5))
-                else:
-                    forecast_date = end_date
-                late_days = (forecast_date - pi_end).days if pi_end and forecast_date > pi_end else 0
-                on_time = late_days <= 0
-                dot_c = "#16a34a" if on_time else "#dc2626"
-                late_txt = "On time" if on_time else f"+{late_days}d late"
-                late_c = "#16a34a" if on_time else "#dc2626"
-                st.markdown(f"""
-                <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6">
-                  <div style="width:8px;height:8px;border-radius:50%;background:{dot_c};flex-shrink:0"></div>
-                  <div style="flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{f['title'][:40]}</div>
-                  <div style="font-size:11px;color:#6b7280;white-space:nowrap">Est: {forecast_date.strftime('%d %b')}</div>
-                  <span style="font-size:11px;font-weight:600;color:{late_c};white-space:nowrap">{late_txt}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            st.markdown(card_close(), unsafe_allow_html=True)
-
-        with fc2:
-            st.markdown(card_open(), unsafe_allow_html=True)
-            st.markdown(section_header("🔗 Cross-Team Dependency Map"), unsafe_allow_html=True)
-            short = ["Echo","Code","Beta","Gamma","Hyper"]
-            # Demo dependency matrix — live version would parse item links
-            deps = [[0,2,0,1,0],[1,0,2,0,1],[0,1,0,2,0],[2,0,1,0,0],[0,0,0,1,0]]
-            dep_colors = {0: ("#f9fafb","#6b7280"), 1: ("#fffbeb","#92400e"), 2: ("#fef2f2","#991b1b")}
-            dep_labels = {0: "—", 1: "Med", 2: "High"}
-            header_row = '<div style="width:60px"></div>' + "".join(
-                f'<div style="flex:1;text-align:center;font-size:9px;color:#6b7280;font-weight:600">{s}</div>' for s in short)
-            st.markdown(f'<div style="display:flex;gap:3px;margin-bottom:4px">{header_row}</div>', unsafe_allow_html=True)
-            for ri, row in enumerate(deps):
-                cells = "".join([
-                    f'<div style="flex:1;height:22px;background:{dep_colors[v][0]};border-radius:3px;'
-                    f'display:flex;align-items:center;justify-content:center;font-size:9px;'
-                    f'font-weight:600;color:{dep_colors[v][1]};{"opacity:.3;" if ri==ci else ""}">'
-                    f'{"·" if ri==ci else dep_labels[v]}</div>'
-                    for ci,v in enumerate(row)
-                ])
-                st.markdown(f"""
-                <div style="display:flex;gap:3px;align-items:center;margin-bottom:3px">
-                  <div style="width:60px;font-size:10px;color:#6b7280;text-align:right;padding-right:4px">{short[ri]}</div>
-                  {cells}
-                </div>""", unsafe_allow_html=True)
-            st.markdown("""
-            <div style="display:flex;gap:12px;margin-top:8px;font-size:10px;color:#6b7280">
-              <span><span style="display:inline-block;width:10px;height:10px;background:#fef2f2;border-radius:2px;vertical-align:middle"></span> High</span>
-              <span><span style="display:inline-block;width:10px;height:10px;background:#fffbeb;border-radius:2px;vertical-align:middle"></span> Medium</span>
-              <span><span style="display:inline-block;width:10px;height:10px;background:#f9fafb;border-radius:2px;vertical-align:middle"></span> None</span>
+            <div style="background:{sc['bg']};border:{border_style};border-radius:8px;
+                 padding:8px 6px;text-align:center;cursor:pointer;margin-bottom:4px">
+              <div style="font-size:20px;font-weight:800;color:{sc['color']}">{count}</div>
+              <div style="font-size:9px;color:{sc['color']};font-weight:600;line-height:1.3">{sname}</div>
             </div>""", unsafe_allow_html=True)
-            st.markdown(card_close(), unsafe_allow_html=True)
+            if st.button("Filter", key=f"sf_{sname}", use_container_width=True):
+                st.session_state["pi_status_filter"] = None if is_active else sname
+                st.session_state["pi_expanded_feat"] = None
+                st.rerun()
 
-        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── TEAM BOXES ──
+    st.markdown('<div style="font-size:13px;font-weight:700;color:#1a202c;margin-bottom:10px">Team delivery</div>',
+                unsafe_allow_html=True)
+    team_cols = st.columns(5)
+    for idx, team in enumerate(TEAMS):
+        tc = TEAM_COLORS.get(team, "#6b7280")
+        av = TEAM_AVATARS.get(team, "🔷")
+        team_feats    = [f for f in features if f.get("scrum_team") == team]
+        team_done     = sum(1 for f in team_feats if f["state"] in FEATURE_COMPLETED_STATES)
+        team_total    = len(team_feats)
+        pct           = round(team_done / team_total * 100) if team_total > 0 else 0
+        is_active     = st.session_state["pi_team_filter"] == team
+        border_top    = f"3px solid {tc}"
+        border_others = f"2px solid {tc}" if is_active else "1px solid #e8ecf0"
+        with team_cols[idx]:
+            st.markdown(f"""
+            <div style="background:#ffffff;border:{border_others};border-top:{border_top};
+                 border-radius:8px;padding:10px 8px;text-align:center;margin-bottom:4px">
+              <div style="font-size:16px">{av}</div>
+              <div style="font-size:10px;font-weight:700;color:{tc};margin:3px 0;overflow:hidden;
+                   text-overflow:ellipsis;white-space:nowrap">{team.split()[0]}</div>
+              <div style="font-size:20px;font-weight:800;color:{tc}">{team_done}
+                <span style="font-size:12px;color:#9ca3af">/{team_total}</span></div>
+              <div style="font-size:9px;color:#9ca3af;margin-bottom:5px">features done</div>
+              <div style="background:#f3f4f6;border-radius:3px;height:4px;overflow:hidden">
+                <div style="width:{pct}%;height:100%;background:{tc};border-radius:3px"></div></div>
+            </div>""", unsafe_allow_html=True)
+            if st.button(f"{team.split()[0]}", key=f"tf_{team}", use_container_width=True):
+                st.session_state["pi_team_filter"] = None if is_active else team
+                st.session_state["pi_expanded_feat"] = None
+                st.rerun()
+
+    st.markdown("---")
+
+    # ── FILTER & SORT FEATURES ──
+    sf = st.session_state["pi_status_filter"]
+    tf = st.session_state["pi_team_filter"]
+    sc_col = st.session_state["pi_sort_col"]
+    sc_asc = st.session_state["pi_sort_asc"]
+
+    filtered = features
+    if sf:  filtered = [f for f in filtered if f["status"] == sf]
+    if tf:  filtered = [f for f in filtered if f.get("scrum_team") == tf]
+
+    # Add computed fields from task_data
+    enriched = []
+    for f in filtered:
+        td   = task_data.get(f["id"], {})
+        pdev = f.get("pdev", 0) or 0
+        pqa  = f.get("pqa", 0) or 0
+        adev = td.get("dev_actual", 0)
+        aqa  = td.get("qa_actual", 0)
+        enriched.append({**f,
+            "dev_actual": adev, "qa_actual": aqa,
+            "over_dev":   round(adev - pdev, 1),
+            "over_qa":    round(aqa  - pqa, 1),
+            "bug_count":  td.get("bug_count", 0),
+            "tasks":      td.get("tasks", []),
+            "is_overrun": (adev > pdev and pdev > 0) or (aqa > pqa and pqa > 0),
+        })
+
+    def sort_key(f):
+        v = f.get(sc_col, 0) or 0
+        return str(v).lower() if isinstance(v, str) else v
+    enriched.sort(key=sort_key, reverse=not sc_asc)
+
+    # ── TABS ──
+    at_risk_feats  = [f for f in enriched if f["status"] in ["On Hold","Blocked by Dependent Bugs"] or f["is_overrun"]]
+    overburn_feats = [f for f in enriched if f["is_overrun"]]
+    blocked_feats  = [f for f in enriched if f["status"] in ["On Hold","Blocked by Dependent Bugs"]]
+
+    tab_board, tab_risk, tab_over, tab_block, tab_bugs = st.tabs([
+        f"📊 Feature board ({len(enriched)})",
+        f"⚠️ At risk ({len(at_risk_feats)})",
+        f"🔥 Overburn ({len(overburn_feats)})",
+        f"🚧 Blocked ({len(blocked_feats)})",
+        "🐛 Bug summary",
+    ])
+
+    def sort_header(label, col, current_col, current_asc):
+        icon = "↑" if (current_col==col and current_asc) else "↓" if (current_col==col) else "↕"
+        return f"{label} {icon}"
+
+    def render_feature_table(feat_list, key_prefix):
+        if not feat_list:
+            st.success("✅ No items in this category")
+            return
+
+        # Active filter display + clear
+        fc1, fc2 = st.columns([5,1])
+        with fc1:
+            tags = []
+            if sf: tags.append(f"Status: {sf}")
+            if tf: tags.append(f"Team: {tf}")
+            tag_html = " &nbsp;·&nbsp; ".join(f'<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;padding:1px 8px;font-size:11px">{t}</span>' for t in tags)
+            st.markdown(f'<div style="font-size:12px;color:#6b7280;padding:4px 0">Showing {len(feat_list)} features {tag_html}</div>', unsafe_allow_html=True)
+        with fc2:
+            dl_buf = build_feature_excel(feat_list, task_data)
+            st.download_button("📥 Export", data=dl_buf,
+                               file_name=f"pi_{pi_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key=f"dl_{key_prefix}", use_container_width=True)
+
+        # Column headers with sort buttons
+        hcols = st.columns([3,5,12,8,7,7,5,5,5,5,5,5,4,4])
+        headers = [
+            ("PI #","pi_priority"),("ID","id"),("Title","title"),("Solution owner","solution_owner"),
+            ("Scrum team","scrum_team"),("Dep. team","dep_team"),
+            ("Plan dev","pdev"),("Act dev","dev_actual"),("Over dev","over_dev"),
+            ("Plan QA","pqa"),("Act QA","qa_actual"),("Over QA","over_qa"),
+            ("Bugs","bug_count"),("Link",""),
+        ]
+        for col_el, (lbl, col_key) in zip(hcols, headers):
+            with col_el:
+                if col_key:
+                    arrow = "↑" if (sc_col==col_key and sc_asc) else "↓" if sc_col==col_key else ""
+                    if st.button(f"{lbl}{' '+arrow if arrow else ''}", key=f"sh_{key_prefix}_{col_key}", use_container_width=True):
+                        if st.session_state["pi_sort_col"] == col_key:
+                            st.session_state["pi_sort_asc"] = not st.session_state["pi_sort_asc"]
+                        else:
+                            st.session_state["pi_sort_col"] = col_key
+                            st.session_state["pi_sort_asc"] = True
+                        st.rerun()
+                else:
+                    st.markdown(f'<div style="font-size:10px;color:#9ca3af;padding:5px 0">{lbl}</div>', unsafe_allow_html=True)
+
+        st.markdown("<div style='height:2px;background:#e8ecf0;margin-bottom:6px'></div>", unsafe_allow_html=True)
+
+        for f in feat_list:
+            odev = f["over_dev"]; oqa = f["over_qa"]
+            is_or = f["is_overrun"]
+            row_bg = "#fef2f2" if is_or else "#ffffff"
+            odev_c = "#dc2626" if odev>0 else "#16a34a"
+            oqa_c  = "#dc2626" if oqa>0 else "#16a34a"
+            odev_t = f"+{odev}h" if odev>0 else "—"
+            oqa_t  = f"+{oqa}h"  if oqa>0  else "—"
+
+            # Status badge
+            sc_info = PI_STATUS_COLORS.get(f["status"], {"bg":"#f9fafb","color":"#6b7280","border":"#e5e7eb"})
+
+            rcols = st.columns([3,5,12,8,7,7,5,5,5,5,5,5,4,4])
+            with rcols[0]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 4px;font-size:12px;font-weight:700;color:#374151;text-align:center;border-radius:4px">{f.get("pi_priority","—")}</div>',unsafe_allow_html=True)
+            with rcols[1]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;color:#2563eb">{f["id"]}</div>',unsafe_allow_html=True)
+            with rcols[2]:
+                title_short = f["title"][:45]+"…" if len(f["title"])>45 else f["title"]
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:12px;font-weight:500" title="{f["title"]}">{title_short}<br><span style="font-size:10px;background:{sc_info["bg"]};color:{sc_info["color"]};border-radius:10px;padding:1px 6px">{f["status"]}</span></div>',unsafe_allow_html=True)
+            with rcols[3]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;color:#374151">{f.get("solution_owner","—")[:18]}</div>',unsafe_allow_html=True)
+            with rcols[4]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px">{str(f.get("scrum_team","—"))[:12]}</div>',unsafe_allow_html=True)
+            with rcols[5]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;color:#6b7280">{str(f.get("dep_team","—"))[:12]}</div>',unsafe_allow_html=True)
+            with rcols[6]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f.get("pdev",0) or 0}h</div>',unsafe_allow_html=True)
+            with rcols[7]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f["dev_actual"]}h</div>',unsafe_allow_html=True)
+            with rcols[8]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center;color:{odev_c};font-weight:{"600" if odev>0 else "400"}">{odev_t}</div>',unsafe_allow_html=True)
+            with rcols[9]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f.get("pqa",0) or 0}h</div>',unsafe_allow_html=True)
+            with rcols[10]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f["qa_actual"]}h</div>',unsafe_allow_html=True)
+            with rcols[11]:
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center;color:{oqa_c};font-weight:{"600" if oqa>0 else "400"}">{oqa_t}</div>',unsafe_allow_html=True)
+            with rcols[12]:
+                bc = f["bug_count"]
+                bc_c = "#dc2626" if bc>0 else "#9ca3af"
+                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:12px;font-weight:700;color:{bc_c};text-align:center">{bc if bc>0 else "—"}</div>',unsafe_allow_html=True)
+            with rcols[13]:
+                st.link_button("↗", f.get("devops_url","#"), use_container_width=True)
+
+            # Expand/collapse button
+            exp_key  = f"exp_{key_prefix}_{f['id']}"
+            is_exp   = st.session_state.get("pi_expanded_feat") == f"{key_prefix}_{f['id']}"
+            exp_label= "▲ Hide tasks" if is_exp else "▼ Show tasks"
+            if st.button(exp_label, key=exp_key, use_container_width=True):
+                st.session_state["pi_expanded_feat"] = None if is_exp else f"{key_prefix}_{f['id']}"
+                st.rerun()
+
+            if is_exp:
+                tasks = f.get("tasks", [])
+                if not tasks:
+                    st.info("No tasks/bugs found under this feature.")
+                else:
+                    # Download button
+                    dl_t = build_task_excel(f, tasks)
+                    dl_c1, dl_c2 = st.columns([6,1])
+                    with dl_c1:
+                        st.markdown(f'<div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700">📋 Tasks &amp; bugs under {f["id"]} — {len(tasks)} items</div>',unsafe_allow_html=True)
+                    with dl_c2:
+                        st.download_button("📥", data=dl_t,
+                                           file_name=f"tasks_{f['id']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key=f"tdl_{key_prefix}_{f['id']}", use_container_width=True)
+
+                    th1,th2,th3,th4,th5,th6,th7,th8 = st.columns([5,14,8,6,5,5,5,5])
+                    for th,lbl in zip([th1,th2,th3,th4,th5,th6,th7,th8],
+                                      ["ID","Title","Assignee","State","Activity","Est","Done","Rem"]):
+                        with th:
+                            st.markdown(f'<div style="font-size:10px;color:#9ca3af;font-weight:600;padding:4px 2px">{lbl}</div>',unsafe_allow_html=True)
+
+                    for t in tasks:
+                        t_actual = t.get("done",0) + t.get("rem",0)
+                        t_over   = t_actual > (t.get("est",0) or 0) and (t.get("est",0) or 0) > 0
+                        t_act    = t.get("activity","")
+                        is_excl  = t_act not in DEV_ACTIVITIES and t_act not in QA_ACTIVITIES and t.get("type")!="Bug"
+                        t_bg     = "#fef2f2" if t_over else "#f8fafc"
+                        tc1,tc2,tc3,tc4,tc5,tc6,tc7,tc8 = st.columns([5,14,8,6,5,5,5,5])
+                        with tc1: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;color:#2563eb">{t["id"]}</div>',unsafe_allow_html=True)
+                        with tc2: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;{"color:#9ca3af;" if is_excl else ""}" title="{t["title"]}">{t["title"][:40]}{"…" if len(t["title"])>40 else ""}</div>',unsafe_allow_html=True)
+                        with tc3: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px">{t["assignee"][:16]}</div>',unsafe_allow_html=True)
+                        with tc4:
+                            s_c = "#16a34a" if t["state"] in COMPLETED_STATES else "#2563eb" if t["state"]=="In Progress" else "#6b7280"
+                            st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;color:{s_c}">{t["state"]}</div>',unsafe_allow_html=True)
+                        with tc5: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:10px;color:#6b7280">{"(excl)" if is_excl else t_act[:8]}</div>',unsafe_allow_html=True)
+                        with tc6: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;text-align:center">{t.get("est",0)}h</div>',unsafe_allow_html=True)
+                        with tc7: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;text-align:center">{t.get("done",0)}h</div>',unsafe_allow_html=True)
+                        with tc8: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;text-align:center;color:{"#d97706" if t.get("rem",0)>0 else "#9ca3af"}">{t.get("rem",0)}h</div>',unsafe_allow_html=True)
+
+            st.markdown("<div style='height:1px;background:#f3f4f6'></div>", unsafe_allow_html=True)
+
+    # ── RENDER EACH TAB ──
+    with tab_board: render_feature_table(enriched,       "board")
+    with tab_risk:  render_feature_table(at_risk_feats,  "risk")
+    with tab_over:  render_feature_table(overburn_feats, "over")
+    with tab_block: render_feature_table(blocked_feats,  "block")
+
+    with tab_bugs:
+        st.markdown('<div style="font-size:13px;font-weight:700;color:#1a202c;margin-bottom:10px">Bug summary by feature</div>',unsafe_allow_html=True)
+        bug_rows = []
+        for f in enriched:
+            td  = task_data.get(f["id"], {})
+            bc  = td.get("bug_count", 0)
+            if bc == 0: continue
+            tasks = td.get("tasks", [])
+            bugs  = [t for t in tasks if t.get("type") == "Bug"]
+            open_b   = sum(1 for b in bugs if b.get("state") not in COMPLETED_STATES)
+            closed_b = sum(1 for b in bugs if b.get("state") in COMPLETED_STATES)
+            bug_rows.append({
+                "Feature ID":  f["id"],
+                "Title":       f["title"][:50]+"…" if len(f["title"])>50 else f["title"],
+                "Scrum Team":  f.get("scrum_team","—"),
+                "Total Bugs":  bc,
+                "Open":        open_b,
+                "Closed":      closed_b,
+                "DevOps URL":  f.get("devops_url",""),
+            })
+        if not bug_rows:
+            st.success("✅ No bugs found under any feature.")
+        else:
+            st.dataframe(
+                pd.DataFrame(bug_rows),
+                use_container_width=True, hide_index=True, height=400,
+                column_config={"DevOps URL": st.column_config.LinkColumn("DevOps", display_text="Open ↗")}
+            )
 
 
 
