@@ -585,6 +585,9 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI", _cache_v=0):
     all_features = []
     epic_ids_set = set(epic_ids)  # never include these in feature list
     feats = cl.get_features_for_pi("HRM", pi_name)
+    # Store raw count before filtering for debug
+    result["_raw_count"] = len(feats)
+    result["_sample_state"] = feats[0].get("fields",{}).get("System.State","?") if feats else "no features"
     for f in feats:
         # Double-safety: exclude any Epic IDs and non-Feature types
         if f.get("id") in epic_ids_set:
@@ -2209,7 +2212,9 @@ def main():
                 )
             # Store debug info to show after rerun
             st.session_state["pi_debug"] = (
-                f"Features loaded: {len(pi_data_fresh.get('features',[]))} | "
+                f"Raw features from API: {pi_data_fresh.get('_raw_count','?')} | "
+                f"After status filter: {len(pi_data_fresh.get('features',[]))} | "
+                f"Sample state: {pi_data_fresh.get('_sample_state','?')} | "
                 f"PI dates: {pi_data_fresh.get('pi_start')} → {pi_data_fresh.get('pi_end')} | "
                 f"WIQL error: {st.session_state.get('_wiql_last_error','none')}"
             )
