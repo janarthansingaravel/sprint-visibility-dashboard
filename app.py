@@ -316,27 +316,7 @@ class DevOpsClient:
                 if r.ok:
                     out.extend(r.json().get("value", []))
                 else:
-                    # Store error and try with minimal fields as fallback
                     st.session_state["_wiql_last_error"] = f"batch {r.status_code}: {r.text[:200]}"
-                    # Fallback: fetch with minimal safe fields
-                    r2 = requests.post(
-                        f"{self.org}/_apis/wit/workitemsbatch?api-version=7.0",
-                        headers=self.h,
-                        json={"ids": batch, "fields": [
-                            "System.Id", "System.Title", "System.WorkItemType",
-                            "System.State", "System.AssignedTo", "System.Tags",
-                            "System.AreaPath", "Microsoft.VSTS.Common.Priority",
-                            "Microsoft.VSTS.Scheduling.StartDate",
-                            "Microsoft.VSTS.Scheduling.TargetDate",
-                            "Custom.PI",
-                            "Custom.ScrumTeamOwnership", "Custom.SolutionOwner",
-                            "Custom.DependantScrumTeam",
-                            "Custom.PlannedDevEffort", "Custom.PlannedQAEffort",
-                        ]},
-                        timeout=15
-                    )
-                    if r2.ok:
-                        out.extend(r2.json().get("value", []))
             except Exception as e:
                 st.session_state["_wiql_last_error"] = str(e)
         return out
@@ -373,8 +353,6 @@ class DevOpsClient:
             "Microsoft.VSTS.Common.Priority",
             "Custom.PI",
             "Custom.ScrumTeamOwnership",
-            "Custom.SolutionOwner",
-            "Custom.DependantScrumTeam",
             "Custom.PlannedDevEffort",
             "Custom.PlannedQAEffort",
         ]
