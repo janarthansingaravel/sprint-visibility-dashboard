@@ -308,74 +308,21 @@ class DevOpsClient:
         return []
 
     def get_pi_epics(self, proj, pi_name):
-        """Get PI Epic — tries multiple strategies to find the right Epic"""
-        # Strategy 1: by iteration path UNDER PHR-X\pi_name
-        iter_path = f"{proj}\\PHR-X\\{pi_name}"
-        q = f"""SELECT [System.Id] FROM WorkItems
-                WHERE [System.TeamProject] = '{proj}'
-                AND [System.WorkItemType] = 'Epic'
-                AND [System.IterationPath] UNDER '{iter_path}'"""
-        ids = self._wiql(proj, q)
-        if ids:
-            return ids
-        # Strategy 2: iteration path = exactly PHR-X\pi_name
-        q = f"""SELECT [System.Id] FROM WorkItems
-                WHERE [System.TeamProject] = '{proj}'
-                AND [System.WorkItemType] = 'Epic'
-                AND [System.IterationPath] = '{iter_path}'"""
-        ids = self._wiql(proj, q)
-        if ids:
-            return ids
-        # Strategy 3: title contains PI name
+        """Get PI Epic by title — used only for start/end dates"""
         q = f"""SELECT [System.Id] FROM WorkItems
                 WHERE [System.TeamProject] = '{proj}'
                 AND [System.WorkItemType] = 'Epic'
                 AND [System.Title] CONTAINS '{pi_name}'"""
-        ids = self._wiql(proj, q)
-        if ids:
-            return ids
-        # Strategy 4: custom PI field
-        for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
-            q = f"""SELECT [System.Id] FROM WorkItems
-                    WHERE [System.TeamProject] = '{proj}'
-                    AND [System.WorkItemType] = 'Epic'
-                    AND [{field}] = '{pi_name}'"""
-            ids = self._wiql(proj, q)
-            if ids:
-                return ids
-        return []
+        return self._wiql(proj, q)
 
     def get_features_for_pi(self, proj, pi_name):
-        """Get Features for a PI — uses Custom.PI field as primary strategy"""
-        ids = []
-        # Strategy 1: Custom.PI field = pi_name (most reliable)
-        for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
-            q = f"""SELECT [System.Id] FROM WorkItems
-                    WHERE [System.TeamProject] = '{proj}'
-                    AND [System.WorkItemType] = 'Feature'
-                    AND [{field}] = '{pi_name}'
-                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-            ids = self._wiql(proj, q)
-            if ids:
-                break
-        # Strategy 2: iteration path UNDER PHR-X\pi_name
-        if not ids:
-            iter_path = f"{proj}\\PHR-X\\{pi_name}"
-            q = f"""SELECT [System.Id] FROM WorkItems
-                    WHERE [System.TeamProject] = '{proj}'
-                    AND [System.WorkItemType] = 'Feature'
-                    AND [System.IterationPath] UNDER '{iter_path}'
-                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-            ids = self._wiql(proj, q)
-        # Strategy 3: area path UNDER PHR-X
-        if not ids:
-            q = f"""SELECT [System.Id] FROM WorkItems
-                    WHERE [System.TeamProject] = '{proj}'
-                    AND [System.WorkItemType] = 'Feature'
-                    AND [System.AreaPath] UNDER '{proj}\\PHR-X'
-                    AND [System.Tags] CONTAINS '{pi_name}'
-                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-            ids = self._wiql(proj, q)
+        """Get all Features where Custom.PI = pi_name"""
+        q = f"""SELECT [System.Id] FROM WorkItems
+                WHERE [System.TeamProject] = '{proj}'
+                AND [System.WorkItemType] = 'Feature'
+                AND [Custom.PI] = '{pi_name}'
+                ORDER BY [Custom.PIPriorityNo] ASC"""
+        ids = self._wiql(proj, q)
         if not ids:
             return []
         fields = [
@@ -384,12 +331,10 @@ class DevOpsClient:
             "Microsoft.VSTS.Scheduling.StartDate",
             "Microsoft.VSTS.Scheduling.TargetDate",
             "Microsoft.VSTS.Common.Priority",
-            "Custom.PI", "Custom.PIName", "Custom.ProgramIncrement",
-            "Custom.PIPriorityNo", "Custom.POLevelPriority",
+            "Custom.PI", "Custom.PIPriorityNo", "Custom.POLevelPriority",
             "Custom.ScrumTeamOwnership", "Custom.SolutionOwner",
             "Custom.DependantScrumTeam",
             "Custom.PlannedDevEffort", "Custom.PlannedQAEffort",
-            "Custom.Dev", "Custom.QA",
         ]
         return self.get_wi_batch(ids, fields)
 
