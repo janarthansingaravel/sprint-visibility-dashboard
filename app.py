@@ -312,21 +312,34 @@ class DevOpsClient:
         return []
 
     def get_pi_epics(self, proj, pi_name):
-        """Get all Epics tagged with this PI name using WIQL"""
+        """Get all Epics tagged with this PI name — try both common field name formats"""
+        for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
+            q = f"""SELECT [System.Id] FROM WorkItems
+                    WHERE [System.TeamProject] = '{proj}'
+                    AND [System.WorkItemType] = 'Epic'
+                    AND [{field}] = '{pi_name}'"""
+            ids = self._wiql(proj, q)
+            if ids:
+                return ids
+        # Fallback: search by title containing PI name
         q = f"""SELECT [System.Id] FROM WorkItems
                 WHERE [System.TeamProject] = '{proj}'
                 AND [System.WorkItemType] = 'Epic'
-                AND [Custom.PI] = '{pi_name}'"""
+                AND [System.Title] CONTAINS '{pi_name}'"""
         return self._wiql(proj, q)
 
     def get_features_for_pi(self, proj, pi_name):
-        """Get Features where PI field = pi_name"""
-        q = f"""SELECT [System.Id] FROM WorkItems
-                WHERE [System.TeamProject] = '{proj}'
-                AND [System.WorkItemType] = 'Feature'
-                AND [Custom.PI] = '{pi_name}'
-                ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-        ids = self._wiql(proj, q)
+        """Get Features where PI field = pi_name — try both common field name formats"""
+        ids = []
+        for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
+            q = f"""SELECT [System.Id] FROM WorkItems
+                    WHERE [System.TeamProject] = '{proj}'
+                    AND [System.WorkItemType] = 'Feature'
+                    AND [{field}] = '{pi_name}'
+                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
+            ids = self._wiql(proj, q)
+            if ids:
+                break
         if not ids:
             return []
         fields = [
@@ -335,7 +348,8 @@ class DevOpsClient:
             "Microsoft.VSTS.Scheduling.StartDate",
             "Microsoft.VSTS.Scheduling.TargetDate",
             "Microsoft.VSTS.Common.Priority",
-            "Custom.PI", "Custom.PIPriorityNo", "Custom.POLevelPriority",
+            "Custom.PI", "Custom.PIName", "Custom.ProgramIncrement",
+            "Custom.PIPriorityNo", "Custom.POLevelPriority",
         ]
         return self.get_wi_batch(ids, fields)
 
@@ -545,7 +559,7 @@ def load_team(org, proj, pat, team):
 # PI DATA LOADER
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
-def load_pi_data(org, pat, pi_name):
+def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
     cl = DevOpsClient(org, pat)
     result = {"pi_name": pi_name, "epics": [], "features": [], "pi_start": None, "pi_end": None,
               "total_working_days": 0, "remaining_working_days": 0}
@@ -706,13 +720,27 @@ LIVE PI & SPRINT DATA:
         "contents": [{"parts": [{"text": f"{system}\n\nUser question: {prompt}"}]}],
         "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024}
     }
-    try:
-        r = requests.post(f"{url}?key={key}", json=payload, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        return f"⚠️ Gemini error: {str(e)}"
+    import time
+    for attempt in range(3):
+        try:
+            r = requests.post(f"{url}?key={key}", json=payload, timeout=30)
+            if r.status_code == 429:
+                wait = 15 * (attempt + 1)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except requests.exceptions.HTTPError as e:
+            if r.status_code == 429:
+                if attempt == 2:
+                    return "⚠️ Gemini rate limit reached (free tier: 15 req/min). Wait 60 seconds and try again."
+                time.sleep(15 * (attempt + 1))
+            else:
+                return f"⚠️ Gemini error: {str(e)}"
+        except Exception as e:
+            return f"⚠️ Gemini error: {str(e)}"
+    return "⚠️ Gemini rate limit — please wait a moment and try again."
 
 def get_proactive_insights(context, key):
     prompt = """Analyse the PI and sprint data and give me exactly 3 proactive insights I should act on TODAY.
@@ -1279,17 +1307,28 @@ def render_pi_tab(pi_data, all_sprint_data):
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
               <div style="width:28px;height:28px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:14px">✨</div>
               <div style="font-size:14px;font-weight:700">Gemini AI — Proactive Insights</div>
-              <span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:12px;padding:2px 8px;font-size:10px;font-weight:600">Auto-generated from live data</span>
+              <span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:12px;padding:2px 8px;font-size:10px;font-weight:600">Data-aware</span>
             </div>
             """, unsafe_allow_html=True)
-            if "pi_insights" not in st.session_state:
-                with st.spinner("Analysing PI data with Gemini..."):
-                    st.session_state["pi_insights"] = get_proactive_insights(ctx, gemini_key)
-            st.markdown(st.session_state["pi_insights"].replace("\n","<br>"), unsafe_allow_html=True)
-            if st.button("🔄 Refresh insights", key="refresh_insights"):
-                if "pi_insights" in st.session_state:
+
+            # Only generate when explicitly requested — avoids 429 on every page load
+            if "pi_insights" in st.session_state and st.session_state["pi_insights"]:
+                st.markdown(st.session_state["pi_insights"].replace("\n","<br>"),
+                            unsafe_allow_html=True)
+                if st.button("🔄 Refresh insights", key="refresh_insights"):
                     del st.session_state["pi_insights"]
-                st.rerun()
+                    st.rerun()
+            else:
+                st.markdown("""
+                <div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;
+                     padding:12px;font-size:12px;color:#6b7280;line-height:1.6">
+                  Click below to generate AI insights from your live PI data.
+                  Gemini will analyse all 5 teams and surface the top 3 actions for today.
+                </div>""", unsafe_allow_html=True)
+                if st.button("✨ Generate AI insights now", key="gen_insights", use_container_width=True):
+                    with st.spinner("Gemini is analysing your PI data..."):
+                        st.session_state["pi_insights"] = get_proactive_insights(ctx, gemini_key)
+                    st.rerun()
             st.markdown(card_close(), unsafe_allow_html=True)
 
     # ── GEMINI AI CHAT PANEL (right column) ──
@@ -1488,25 +1527,42 @@ def render_team_card(td, col):
             ("📋 No Est",     uc, "unestimated","#ecfeff", "#0891b2"),
             ("📅 Date Issue", dc_,"date_issue", "#fdf2f8", "#db2777"),
         ]
-        row1 = st.columns(3); row2 = st.columns(3)
-        for idx, (label, count, key_suffix, bg, color) in enumerate(metrics):
-            c = row1[idx] if idx<3 else row2[idx-3]
-            with c:
-                st.markdown(f"""
-                <div style="background:{bg};border-radius:6px;padding:7px 4px;text-align:center;margin-bottom:3px">
-                  <div style="font-size:20px;font-weight:800;color:{color}">{count}</div>
-                  <div style="font-size:9px;color:#6b7280;font-weight:600">{label}</div>
-                </div>""", unsafe_allow_html=True)
-                if count > 0:
-                    if st.button("View", key=f"card_{team}_{key_suffix}", use_container_width=True):
-                        st.session_state[f"card_filter_{team}"] = key_suffix
+        # Render all 6 metric boxes as pure HTML — no buttons inside columns
+        cells_html = ""
+        for label, count, key_suffix, bg, color in metrics:
+            cells_html += f"""
+            <div style="background:{bg};border-radius:6px;padding:7px 4px;text-align:center">
+              <div style="font-size:20px;font-weight:800;color:{color}">{count}</div>
+              <div style="font-size:9px;color:#6b7280;font-weight:600">{label}</div>
+            </div>"""
+        st.markdown(f"""
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px">
+          {cells_html}
+        </div>""", unsafe_allow_html=True)
+
+        # Single row of action buttons — stable, no per-metric columns
+        btn_cols = st.columns(3)
+        with btn_cols[0]:
+            if hc > 0 or wc > 0:
+                if st.button("⚠️ Spill", key=f"card_{team}_spill", use_container_width=True):
+                    f = "high_spill" if hc > 0 else "watch"
+                    if st.session_state.get(f"card_filter_{team}") != f or st.session_state.get("view") != "team_detail":
+                        st.session_state[f"card_filter_{team}"] = f
                         st.session_state.update({"view":"team_detail","selected_team":team})
                         st.rerun()
-
-        if st.button(f"Full Detail →", key=f"full_{team}", use_container_width=True):
-            st.session_state[f"card_filter_{team}"] = None
-            st.session_state.update({"view":"team_detail","selected_team":team})
-            st.rerun()
+        with btn_cols[1]:
+            if oc > 0:
+                if st.button("🔥 Burn", key=f"card_{team}_over", use_container_width=True):
+                    if st.session_state.get(f"card_filter_{team}") != "overburn" or st.session_state.get("view") != "team_detail":
+                        st.session_state[f"card_filter_{team}"] = "overburn"
+                        st.session_state.update({"view":"team_detail","selected_team":team})
+                        st.rerun()
+        with btn_cols[2]:
+            if st.button("Full →", key=f"full_{team}", use_container_width=True):
+                if st.session_state.get("selected_team") != team or st.session_state.get("view") != "team_detail":
+                    st.session_state[f"card_filter_{team}"] = None
+                    st.session_state.update({"view":"team_detail","selected_team":team})
+                    st.rerun()
 
 # ─────────────────────────────────────────────────────────────────
 # SPRINT MONITOR — NINE BOX
@@ -1662,8 +1718,6 @@ def render_sprint_monitor(all_data):
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("<div style='padding:16px 24px 0'>", unsafe_allow_html=True)
-
     # Nine-box toggle
     nb_col, _ = st.columns([1,5])
     with nb_col:
@@ -1747,8 +1801,6 @@ def render_sprint_monitor(all_data):
             st.dataframe(pd.DataFrame(rows2),use_container_width=True,hide_index=True,height=400,
                          column_config={"DevOps Link":st.column_config.LinkColumn("DevOps Link",display_text="Open ↗")})
     with tabs[5]: show_df(sorted(both,key=lambda x:x.get("overrun",0),reverse=True),"Overrun (h)",asc=False,key="t5")
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
 # SPRINT MONITOR — TEAM DETAIL VIEW
@@ -1979,6 +2031,23 @@ def render_sidebar():
 · Work Items → Read<br>· Project & Team → Read<br>· Comments → Read<br>
 <br><b style="color:#374151">Auto-refreshes every 5 min</b><br>
 <br><b style="color:#374151">Sri Lanka holidays</b><br>2025–2026 included</div>""", unsafe_allow_html=True)
+        st.markdown("---")
+        with st.expander("🔍 PI field name not loading?"):
+            st.markdown("""<div style="font-size:11px;color:#374151;line-height:1.8">
+If features show 0, your Azure DevOps PI field name may differ.<br><br>
+<b>To find it:</b><br>
+1. Open any Feature in DevOps<br>
+2. Click ··· → Developer<br>
+3. Press Ctrl+F, search "26R1"<br>
+4. Note the field key above it<br>
+(e.g. Custom.PI or Custom.PIName)<br><br>
+Then update the field name in app.py line ~319.
+</div>""", unsafe_allow_html=True)
+            custom_field = st.text_input("Override PI field name", value="Custom.PI", key="pi_field_override")
+            if st.button("Apply field name", key="apply_field"):
+                st.session_state["pi_field_name"] = custom_field
+                st.session_state["pi_loaded"] = False
+                st.cache_data.clear(); st.rerun()
 
 # ─────────────────────────────────────────────────────────────────
 # MAIN
@@ -2054,10 +2123,12 @@ def main():
             st.session_state["pi_loaded"] = True
         elif st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url",""):
             with st.spinner(f"Loading PI {pi_name} features…"):
+                pi_field = st.session_state.get("pi_field_name", "Custom.PI")
                 st.session_state["pi_data"] = load_pi_data(
                     st.session_state["org_url"],
                     st.session_state["pat"],
-                    pi_name)
+                    pi_name,
+                    pi_field)
             st.session_state["pi_loaded"] = True
 
     all_data = st.session_state["all_data"]
