@@ -557,7 +557,7 @@ def load_team(org, proj, pat, team):
 # PI DATA LOADER
 # ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
-def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
+def load_pi_data(org, pat, pi_name, pi_field="Custom.PI", _cache_v=0):
     cl = DevOpsClient(org, pat)
     result = {"pi_name": pi_name, "epics": [], "features": [], "pi_start": None, "pi_end": None,
               "total_working_days": 0, "remaining_working_days": 0}
@@ -1082,8 +1082,10 @@ def render_pi_tab(pi_data, all_sprint_data):
     with qa1:
         if st.button("🔃 Refresh data", key="pi_refresh", use_container_width=True):
             st.cache_data.clear()
-            st.session_state["pi_loaded"] = False
-            st.session_state["loaded"]    = False
+            st.session_state["cache_version"] = st.session_state.get("cache_version", 0) + 1
+            for key in ["pi_loaded","loaded","pi_data","all_data"]:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.rerun()
     with qa2:
         if st.button("🩺 Run diagnostic", key="pi_diag", use_container_width=True):
@@ -2137,7 +2139,8 @@ def main():
                 return idx, load_team(org, proj, pat, team)
 
             def _load_pi_wrapper(_):
-                return "pi", load_pi_data(org, pat, pi_name, pi_field)
+                cache_v = st.session_state.get("cache_version", 0)
+                return "pi", load_pi_data(org, pat, pi_name, pi_field, cache_v)
 
             tasks = [(i, team) for i, team in enumerate(TEAMS)]
 
