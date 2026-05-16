@@ -2208,12 +2208,22 @@ def main():
                     st.session_state["pat"],
                     pi_name, pi_field, cache_v
                 )
+            # Store debug info to show after rerun
+            st.session_state["pi_debug"] = (
+                f"Features loaded: {len(pi_data_fresh.get('features',[]))} | "
+                f"PI dates: {pi_data_fresh.get('pi_start')} → {pi_data_fresh.get('pi_end')} | "
+                f"WIQL error: {st.session_state.get('_wiql_last_error','none')}"
+            )
             st.session_state["pi_data"]   = pi_data_fresh
             st.session_state["pi_loaded"] = True
             st.rerun()
 
     all_data = st.session_state["all_data"]
     pi_data  = st.session_state.get("pi_data", {})
+
+    # Show debug info if available
+    if st.session_state.get("pi_debug"):
+        st.warning(f"🔍 {st.session_state['pi_debug']}")
 
     # ── TABS: PI first, Sprint second ──
     tab_pi, tab_sprint = st.tabs(["🚀  PI Execution Centre", "📊  Sprint Monitor"])
