@@ -308,8 +308,8 @@ class DevOpsClient:
         return []
 
     def get_pi_epics(self, proj, pi_name):
-        """Get PI Epic by iteration path or title — works for HRM\\PHR-X\\26R1 pattern"""
-        # Primary: match by iteration path (HRM\PHR-X\26R1)
+        """Get PI Epic — tries multiple strategies to find the right Epic"""
+        # Strategy 1: by iteration path UNDER PHR-X\pi_name
         iter_path = f"{proj}\\PHR-X\\{pi_name}"
         q = f"""SELECT [System.Id] FROM WorkItems
                 WHERE [System.TeamProject] = '{proj}'
@@ -318,7 +318,15 @@ class DevOpsClient:
         ids = self._wiql(proj, q)
         if ids:
             return ids
-        # Fallback: title contains PI name (e.g. "26R1")
+        # Strategy 2: iteration path = exactly PHR-X\pi_name
+        q = f"""SELECT [System.Id] FROM WorkItems
+                WHERE [System.TeamProject] = '{proj}'
+                AND [System.WorkItemType] = 'Epic'
+                AND [System.IterationPath] = '{iter_path}'"""
+        ids = self._wiql(proj, q)
+        if ids:
+            return ids
+        # Strategy 3: title contains PI name
         q = f"""SELECT [System.Id] FROM WorkItems
                 WHERE [System.TeamProject] = '{proj}'
                 AND [System.WorkItemType] = 'Epic'
@@ -326,7 +334,7 @@ class DevOpsClient:
         ids = self._wiql(proj, q)
         if ids:
             return ids
-        # Last resort: any custom PI field
+        # Strategy 4: custom PI field
         for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
             q = f"""SELECT [System.Id] FROM WorkItems
                     WHERE [System.TeamProject] = '{proj}'
@@ -338,26 +346,36 @@ class DevOpsClient:
         return []
 
     def get_features_for_pi(self, proj, pi_name):
-        """Get Features under the PI iteration path — HRM only"""
-        iter_path = f"{proj}\\PHR-X\\{pi_name}"
-        # Primary: features under the PI iteration path
-        q = f"""SELECT [System.Id] FROM WorkItems
-                WHERE [System.TeamProject] = '{proj}'
-                AND [System.WorkItemType] = 'Feature'
-                AND [System.IterationPath] UNDER '{iter_path}'
-                ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-        ids = self._wiql(proj, q)
+        """Get Features for a PI — uses Custom.PI field as primary strategy"""
+        ids = []
+        # Strategy 1: Custom.PI field = pi_name (most reliable)
+        for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
+            q = f"""SELECT [System.Id] FROM WorkItems
+                    WHERE [System.TeamProject] = '{proj}'
+                    AND [System.WorkItemType] = 'Feature'
+                    AND [{field}] = '{pi_name}'
+                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
+            ids = self._wiql(proj, q)
+            if ids:
+                break
+        # Strategy 2: iteration path UNDER PHR-X\pi_name
         if not ids:
-            # Fallback: custom PI field
-            for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
-                q = f"""SELECT [System.Id] FROM WorkItems
-                        WHERE [System.TeamProject] = '{proj}'
-                        AND [System.WorkItemType] = 'Feature'
-                        AND [{field}] = '{pi_name}'
-                        ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-                ids = self._wiql(proj, q)
-                if ids:
-                    break
+            iter_path = f"{proj}\\PHR-X\\{pi_name}"
+            q = f"""SELECT [System.Id] FROM WorkItems
+                    WHERE [System.TeamProject] = '{proj}'
+                    AND [System.WorkItemType] = 'Feature'
+                    AND [System.IterationPath] UNDER '{iter_path}'
+                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
+            ids = self._wiql(proj, q)
+        # Strategy 3: area path UNDER PHR-X
+        if not ids:
+            q = f"""SELECT [System.Id] FROM WorkItems
+                    WHERE [System.TeamProject] = '{proj}'
+                    AND [System.WorkItemType] = 'Feature'
+                    AND [System.AreaPath] UNDER '{proj}\\PHR-X'
+                    AND [System.Tags] CONTAINS '{pi_name}'
+                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
+            ids = self._wiql(proj, q)
         if not ids:
             return []
         fields = [
@@ -2006,17 +2024,45 @@ def render_sidebar():
 If features show 0, your Azure DevOps PI field name may differ.<br><br>
 <b>To find it:</b><br>
 1. Open any Feature in DevOps<br>
-2. Click ··· → Developer<br>
+2. Paste this in browser:<br>
+<code>https://dev.azure.com/PeoplesHR/HRM/_apis/wit/workitems/133815?$expand=all&api-version=7.0</code><br>
 3. Press Ctrl+F, search "26R1"<br>
-4. Note the field key above it<br>
-(e.g. Custom.PI or Custom.PIName)<br><br>
-Then update the field name in app.py line ~319.
+4. Note the field key above it
 </div>""", unsafe_allow_html=True)
             custom_field = st.text_input("Override PI field name", value="Custom.PI", key="pi_field_override")
             if st.button("Apply field name", key="apply_field"):
                 st.session_state["pi_field_name"] = custom_field
                 st.session_state["pi_loaded"] = False
                 st.cache_data.clear(); st.rerun()
+
+        with st.expander("🩺 Debug PI loading"):
+            if st.button("Run diagnostic", key="diag_btn"):
+                org = st.session_state.get("org_url","")
+                pat = st.session_state.get("pat","")
+                pi  = st.session_state.get("current_pi","26R1")
+                if pat and "YOUR_ORG" not in org:
+                    cl = DevOpsClient(org, pat)
+                    st.write(f"**Org:** {org}")
+                    st.write(f"**PI:** {pi}")
+                    # Test Epic query
+                    epic_ids = cl.get_pi_epics("HRM", pi)
+                    st.write(f"**Epic IDs found:** {epic_ids}")
+                    # Test Feature query  
+                    feat_ids = []
+                    for field in ["Custom.PI","Custom.PIName"]:
+                        q = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'HRM' AND [System.WorkItemType] = 'Feature' AND [{field}] = '{pi}'"
+                        ids = cl._wiql("HRM", q)
+                        st.write(f"**Features via {field}:** {len(ids)} found")
+                        if ids:
+                            feat_ids = ids[:3]
+                            break
+                    if feat_ids:
+                        sample = cl.get_wi_batch(feat_ids[:1], ["System.Id","System.Title","System.State","Custom.PI","Custom.ScrumTeamOwnership","Custom.PlannedDevEffort"])
+                        if sample:
+                            st.write("**Sample feature fields:**")
+                            st.json(sample[0].get("fields",{}))
+                else:
+                    st.warning("Connect to Azure DevOps first")
 
 # ─────────────────────────────────────────────────────────────────
 # MAIN
