@@ -98,6 +98,7 @@ LK_HOLIDAYS = {
 # Feature status mapping for PI dashboard
 PI_STATUS_MAP = {
     "On hold":                      "On Hold",
+    "On Hold":                      "On Hold",
     "Feature Approval":             "Feature Approval",
     "PI Ready":                     "PI Ready",
     "Grooming Pending":             "Grooming",
@@ -555,7 +556,7 @@ def load_team(org, proj, pat, team):
 # ─────────────────────────────────────────────────────────────────
 # PI DATA LOADER
 # ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
     cl = DevOpsClient(org, pat)
     result = {"pi_name": pi_name, "epics": [], "features": [], "pi_start": None, "pi_end": None,
@@ -587,10 +588,10 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
     feats = cl.get_features_for_pi("HRM", pi_name)
     for f in feats:
         fields      = f.get("fields", {})
-        raw_state   = fields.get("System.State", "")
+        raw_state    = fields.get("System.State", "")
         consolidated = PI_STATUS_MAP.get(raw_state)
         if not consolidated:
-            continue
+            continue  # Skip features not in approved status list
         af       = fields.get("System.AssignedTo", {})
         assignee = af.get("displayName", "Unassigned") if isinstance(af, dict) else str(af or "Unassigned")
         # Extract planned effort — try multiple possible field names
