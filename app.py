@@ -237,7 +237,7 @@ class DevOpsClient:
 
     def _get(self, url, p=None):
         try:
-            r = requests.get(url, headers=self.h, params=p, timeout=20)
+            r = requests.get(url, headers=self.h, params=p, timeout=12)
             r.raise_for_status()
             return r.json()
         except Exception:
@@ -245,7 +245,7 @@ class DevOpsClient:
 
     def _post(self, url, b):
         try:
-            r = requests.post(url, headers=self.h, json=b, timeout=20)
+            r = requests.post(url, headers=self.h, json=b, timeout=15)
             r.raise_for_status()
             return r.json()
         except Exception:
@@ -479,7 +479,7 @@ def compute_health(items):
 # ─────────────────────────────────────────────────────────────────
 # SPRINT DATA LOADER
 # ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def load_team(org, proj, pat, team):
     cl = DevOpsClient(org, pat)
     sp = cl.get_sprint(proj, team)
@@ -1409,19 +1409,50 @@ def render_pi_tab(pi_data, all_sprint_data):
                 </div>
                 """, unsafe_allow_html=True)
 
-        # Quick prompt buttons
+        # Quick prompt buttons — disabled during cooldown or when pending
+        import time as _time
+        _last = st.session_state.get("_gemini_last_call_ui", 0)
+        _since = _time.time() - _last
+        _cooldown = 15  # seconds — safe for free tier
+        _is_pending = bool(st.session_state.get("pi_chat_pending"))
+        _in_cooldown = 0 < _since < _cooldown
+        _ready = not _is_pending and not _in_cooldown
+
+        if not _ready:
+            if _in_cooldown:
+                _rem = int(_cooldown - _since) + 1
+                st.markdown(
+                    f'<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;'
+                    f'padding:8px 12px;font-size:12px;color:#92400e;margin-bottom:6px">'
+                    f'⏳ <b>Ready in {_rem}s</b> — waiting for Gemini rate limit to clear</div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;'
+                    'padding:8px 12px;font-size:12px;color:#1d4ed8;margin-bottom:6px">'
+                    '✨ Gemini is thinking...</div>',
+                    unsafe_allow_html=True)
+
         quick_prompts = [
-            ("⚠️ Escalate today?",    "What should I escalate to leadership today based on the PI data? Be specific with team names and item counts."),
-            ("📄 Draft PI update",    "Draft a concise PI review status update I can share with stakeholders. Include overall confidence, feature status, and top 2 risks."),
-            ("📉 Beta Brigade low?",  "Analyse Beta Brigade's performance. What is causing their low delivery and what should the Scrum Master do?"),
-            ("🎯 Hit PI end date?",   f"Based on current velocity and remaining work, will we complete all PI {pi_name} commitments by {pi_end}? Which features are at risk?"),
+            ("⚠️ Escalate today?",   "What should I escalate to leadership today based on the PI data? Be specific with team names and item counts."),
+            ("📄 Draft PI update",   "Draft a concise PI review status update I can share with stakeholders. Include overall confidence, feature status, and top 2 risks."),
+            ("📉 Beta Brigade low?", "Analyse Beta Brigade's performance. What is causing their low delivery and what should the Scrum Master do?"),
+            ("🎯 Hit PI end date?",  f"Based on current velocity and remaining work, will we complete all PI {pi_name} commitments by {pi_end}? Which features are at risk?"),
         ]
         for label, prompt in quick_prompts:
-            if st.button(label, key=f"qp_{label[:12]}", use_container_width=True):
-                st.session_state.setdefault("pi_chat_messages", [])
-                st.session_state["pi_chat_messages"].append({"role": "user", "content": prompt})
-                st.session_state["pi_chat_pending"] = prompt
-                st.rerun()
+            # Render disabled-style button when in cooldown
+            if not _ready:
+                st.markdown(
+                    f'<div style="background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);'
+                    f'border-radius:6px;padding:7px 12px;font-size:12px;color:var(--color-text-secondary);'
+                    f'margin-bottom:4px;opacity:.5;cursor:not-allowed">{label}</div>',
+                    unsafe_allow_html=True)
+            else:
+                if st.button(label, key=f"qp_{label[:12]}", use_container_width=True):
+                    st.session_state.setdefault("pi_chat_messages", [])
+                    st.session_state["pi_chat_messages"].append({"role": "user", "content": prompt})
+                    st.session_state["pi_chat_pending"] = prompt
+                    st.rerun()
 
         # Chat history display
         messages = st.session_state.get("pi_chat_messages", [])
@@ -1451,29 +1482,35 @@ def render_pi_tab(pi_data, all_sprint_data):
                         f'{clean[:800]}</div>',
                         unsafe_allow_html=True)
 
-        # Process pending Gemini call (happens before chat_input renders)
+        # Process pending Gemini call
         if st.session_state.get("pi_chat_pending"):
             pending = st.session_state.pop("pi_chat_pending")
+            import time as _tc
+            st.session_state["_gemini_last_call_ui"] = _tc.time()  # start cooldown NOW
             with st.spinner("✨ Gemini thinking — please wait..."):
                 response = call_gemini(pending, ctx, gemini_key)
             st.session_state.setdefault("pi_chat_messages", [])
             st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
-            # Mark time so UI can show cooldown
-            import time
-            st.session_state["_gemini_last_call_ui"] = time.time()
             st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ── CHAT INPUT — must be at page level, NOT inside st.columns ──
     if gemini_key:
-        import time
-        last_ui = st.session_state.get("_gemini_last_call_ui", 0)
-        secs_since = time.time() - last_ui
-        cooldown = 8  # seconds to wait between requests
-        if 0 < secs_since < cooldown:
-            remaining = int(cooldown - secs_since) + 1
-            st.info(f"⏳ Ready in {remaining}s — Gemini free tier needs a brief pause between requests.")
+        import time as _t
+        _last2 = st.session_state.get("_gemini_last_call_ui", 0)
+        _since2 = _t.time() - _last2
+        _cooldown2 = 15
+
+        if st.session_state.get("pi_chat_pending"):
+            # Already processing — show spinner, no input
+            st.info("✨ Gemini is thinking... please wait")
+        elif 0 < _since2 < _cooldown2:
+            _rem2 = int(_cooldown2 - _since2) + 1
+            st.info(f"⏳ Ready in **{_rem2}s** — Gemini free tier cooldown")
+            # Auto-rerun every second so the countdown updates
+            _t.sleep(1)
+            st.rerun()
         else:
             user_input = st.chat_input("Ask your PI assistant...", key="pi_chat_input")
             if user_input and user_input.strip():
@@ -2125,19 +2162,63 @@ def main():
                 st.session_state["all_data"] = gen_demo_sprint()
                 st.session_state["loaded"] = True
         elif st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url",""):
-            prog = st.progress(0, "Connecting to Azure DevOps…"); all_data = []
-            for idx, team in enumerate(TEAMS):
-                prog.progress((idx+1)/len(TEAMS), f"Loading {team}…")
-                all_data.append(load_team(st.session_state["org_url"],
-                                          st.session_state["project"],
-                                          st.session_state["pat"], team))
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            org = st.session_state["org_url"]
+            proj = st.session_state["project"]
+            pat  = st.session_state["pat"]
+            pi_name  = st.session_state.get("current_pi","26R1")
+            pi_field = st.session_state.get("pi_field_name","Custom.PI")
+
+            prog = st.progress(0, "Connecting to Azure DevOps…")
+            status_ph = st.empty()  # placeholder for live status text
+            all_data = [None] * len(TEAMS)
+            completed_count = 0
+
+            # Load all 5 teams + PI data IN PARALLEL
+            def _load_team_wrapper(idx_team):
+                idx, team = idx_team
+                return idx, load_team(org, proj, pat, team)
+
+            def _load_pi_wrapper(_):
+                return "pi", load_pi_data(org, pat, pi_name, pi_field)
+
+            tasks = [(i, team) for i, team in enumerate(TEAMS)]
+
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                # Submit all team loads + PI load simultaneously
+                futures = {ex.submit(_load_team_wrapper, t): t[1] for t in tasks}
+                futures[ex.submit(_load_pi_wrapper, None)] = "PI Features"
+
+                for future in as_completed(futures):
+                    task_label = futures[future]
+                    try:
+                        result = future.result()
+                        if result[0] == "pi":
+                            st.session_state["pi_data"]   = result[1]
+                            st.session_state["pi_loaded"] = True
+                        else:
+                            idx, td = result
+                            all_data[idx] = td
+                            completed_count += 1
+                            pct = completed_count / len(TEAMS)
+                            prog.progress(pct, f"Loaded {td.get('team','')} ✓")
+                            status_ph.markdown(
+                                f'<div style="font-size:11px;color:#6b7280">'
+                                f'Loading in parallel… {completed_count}/{len(TEAMS)} teams done</div>',
+                                unsafe_allow_html=True)
+                    except Exception as e:
+                        st.warning(f"Error loading {task_label}: {str(e)[:80]}")
+
+            prog.empty(); status_ph.empty()
+            # Fill any None slots (shouldn't happen but safety net)
+            all_data = [d for d in all_data if d is not None]
             st.session_state["all_data"] = all_data
-            st.session_state["loaded"] = True
-            prog.empty()
-            # Load PM actions in background
+            st.session_state["loaded"]   = True
+
+            # Load PM action items in background (non-blocking, best-effort)
             try:
-                st.session_state["pm_actions"] = load_pm_action_items(
-                    st.session_state["org_url"], st.session_state["pat"], all_data)
+                st.session_state["pm_actions"] = load_pm_action_items(org, pat, all_data)
             except Exception:
                 pass
         else:
@@ -2159,20 +2240,10 @@ def main():
                     st.session_state.update({"use_demo":True,"loaded":False}); st.rerun()
             return
 
-    # ── PI DATA LOADING ──
+    # ── PI DATA LOADING (demo only — live loads in parallel above) ──
     if not st.session_state.get("pi_loaded"):
-        pi_name = st.session_state.get("current_pi","26R1")
         if st.session_state.get("use_demo"):
-            st.session_state["pi_data"] = gen_demo_pi()
-            st.session_state["pi_loaded"] = True
-        elif st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url",""):
-            with st.spinner(f"Loading PI {pi_name} features…"):
-                pi_field = st.session_state.get("pi_field_name", "Custom.PI")
-                st.session_state["pi_data"] = load_pi_data(
-                    st.session_state["org_url"],
-                    st.session_state["pat"],
-                    pi_name,
-                    pi_field)
+            st.session_state["pi_data"]   = gen_demo_pi()
             st.session_state["pi_loaded"] = True
 
     all_data = st.session_state["all_data"]
