@@ -1,6 +1,6 @@
 """
 HRM PI & Sprint Command Centre
-PI Execution Centre + Sprint Monitor · Azure DevOps · Gemini AI
+PI Execution Centre + Sprint Monitor · Azure DevOps
 """
 
 import streamlit as st
@@ -59,10 +59,6 @@ def load_secrets():
             st.session_state["pat"]      = s.get("pat", "")
     except Exception:
         pass
-    try:
-        st.session_state["gemini_key"] = st.secrets["gemini"]["api_key"]
-    except Exception:
-        pass
 
 load_secrets()
 
@@ -77,7 +73,7 @@ COMPLETED   = ["Done", "Resolved", "Dev Completed"]
 INPROGRESS  = ["In Progress", "Scheduled"]
 VALID_TYPES = ["Task", "Bug"]
 
-PROJECTS = ["HRM", "Cloud-Team"]
+PROJECTS = ["HRM"]
 
 PM_NAME = "Janarthan Singaravel"
 
@@ -312,7 +308,25 @@ class DevOpsClient:
         return []
 
     def get_pi_epics(self, proj, pi_name):
-        """Get all Epics tagged with this PI name — try both common field name formats"""
+        """Get PI Epic by iteration path or title — works for HRM\\PHR-X\\26R1 pattern"""
+        # Primary: match by iteration path (HRM\PHR-X\26R1)
+        iter_path = f"{proj}\\PHR-X\\{pi_name}"
+        q = f"""SELECT [System.Id] FROM WorkItems
+                WHERE [System.TeamProject] = '{proj}'
+                AND [System.WorkItemType] = 'Epic'
+                AND [System.IterationPath] UNDER '{iter_path}'"""
+        ids = self._wiql(proj, q)
+        if ids:
+            return ids
+        # Fallback: title contains PI name (e.g. "26R1")
+        q = f"""SELECT [System.Id] FROM WorkItems
+                WHERE [System.TeamProject] = '{proj}'
+                AND [System.WorkItemType] = 'Epic'
+                AND [System.Title] CONTAINS '{pi_name}'"""
+        ids = self._wiql(proj, q)
+        if ids:
+            return ids
+        # Last resort: any custom PI field
         for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
             q = f"""SELECT [System.Id] FROM WorkItems
                     WHERE [System.TeamProject] = '{proj}'
@@ -321,25 +335,29 @@ class DevOpsClient:
             ids = self._wiql(proj, q)
             if ids:
                 return ids
-        # Fallback: search by title containing PI name
-        q = f"""SELECT [System.Id] FROM WorkItems
-                WHERE [System.TeamProject] = '{proj}'
-                AND [System.WorkItemType] = 'Epic'
-                AND [System.Title] CONTAINS '{pi_name}'"""
-        return self._wiql(proj, q)
+        return []
 
     def get_features_for_pi(self, proj, pi_name):
-        """Get Features where PI field = pi_name — try both common field name formats"""
-        ids = []
-        for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
-            q = f"""SELECT [System.Id] FROM WorkItems
-                    WHERE [System.TeamProject] = '{proj}'
-                    AND [System.WorkItemType] = 'Feature'
-                    AND [{field}] = '{pi_name}'
-                    ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
-            ids = self._wiql(proj, q)
-            if ids:
-                break
+        """Get Features under the PI iteration path — HRM only"""
+        iter_path = f"{proj}\\PHR-X\\{pi_name}"
+        # Primary: features under the PI iteration path
+        q = f"""SELECT [System.Id] FROM WorkItems
+                WHERE [System.TeamProject] = '{proj}'
+                AND [System.WorkItemType] = 'Feature'
+                AND [System.IterationPath] UNDER '{iter_path}'
+                ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
+        ids = self._wiql(proj, q)
+        if not ids:
+            # Fallback: custom PI field
+            for field in ["Custom.PI", "Custom.PIName", "Custom.ProgramIncrement"]:
+                q = f"""SELECT [System.Id] FROM WorkItems
+                        WHERE [System.TeamProject] = '{proj}'
+                        AND [System.WorkItemType] = 'Feature'
+                        AND [{field}] = '{pi_name}'
+                        ORDER BY [Microsoft.VSTS.Common.Priority] ASC"""
+                ids = self._wiql(proj, q)
+                if ids:
+                    break
         if not ids:
             return []
         fields = [
@@ -354,12 +372,12 @@ class DevOpsClient:
         return self.get_wi_batch(ids, fields)
 
     def get_child_tasks(self, proj, feature_ids):
-        """Get all Tasks/Bugs under the given feature IDs via WIQL"""
+        """Get all Tasks/Bugs under the given feature IDs — HRM only"""
         if not feature_ids:
             return []
         id_list = ", ".join(str(i) for i in feature_ids)
         q = f"""SELECT [System.Id] FROM WorkItems
-                WHERE [System.TeamProject] IN ('HRM','Cloud-Team')
+                WHERE [System.TeamProject] = 'HRM'
                 AND [System.WorkItemType] IN ('Task','Bug')
                 AND [System.Parent] IN ({id_list})"""
         ids = self._wiql(proj, q)
@@ -563,18 +581,20 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
     cl = DevOpsClient(org, pat)
     result = {"pi_name": pi_name, "epics": [], "features": [], "pi_start": None, "pi_end": None,
               "total_working_days": 0, "remaining_working_days": 0}
-    # Get PI Epic for dates
+
+    # ── Get PI Epic dates from Azure DevOps ──
     epic_ids = cl.get_pi_epics("HRM", pi_name)
     if epic_ids:
         epics = cl.get_wi_batch(epic_ids, [
             "System.Id", "System.Title", "System.State",
+            "System.IterationPath", "System.AreaPath",
             "Microsoft.VSTS.Scheduling.StartDate",
             "Microsoft.VSTS.Scheduling.TargetDate",
         ])
         result["epics"] = epics
         for e in epics:
             f = e.get("fields", {})
-            s = pd_(f.get("Microsoft.VSTS.Scheduling.StartDate"))
+            s  = pd_(f.get("Microsoft.VSTS.Scheduling.StartDate"))
             e2 = pd_(f.get("Microsoft.VSTS.Scheduling.TargetDate"))
             if s and e2:
                 result["pi_start"] = s
@@ -582,37 +602,37 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI"):
                 result["total_working_days"]     = working_days_between(s, e2)
                 result["remaining_working_days"] = working_days_remaining(e2)
                 break
-    # Get Features for both projects
+
+    # ── Get Features — HRM only ──
     all_features = []
-    for proj in PROJECTS:
-        feats = cl.get_features_for_pi(proj, pi_name)
-        for f in feats:
-            fields = f.get("fields", {})
-            raw_state = fields.get("System.State", "")
-            consolidated = PI_STATUS_MAP.get(raw_state)
-            if not consolidated:
-                continue  # Skip statuses not in PI dashboard
-            af = fields.get("System.AssignedTo", {})
-            assignee = af.get("displayName", "Unassigned") if isinstance(af, dict) else str(af or "Unassigned")
-            feat_obj = {
-                "id":         f.get("id"),
-                "title":      fields.get("System.Title", ""),
-                "state":      raw_state,
-                "status":     consolidated,
-                "assignee":   assignee,
-                "priority":   fields.get("Microsoft.VSTS.Common.Priority", 99),
-                "pi_priority":fields.get("Custom.PIPriorityNo", 0),
-                "po_priority":fields.get("Custom.POLevelPriority", 0),
-                "tags":       fields.get("System.Tags", "") or "",
-                "area":       fields.get("System.AreaPath", ""),
-                "project":    proj,
-                "start_date": pd_(fields.get("Microsoft.VSTS.Scheduling.StartDate")),
-                "end_date":   pd_(fields.get("Microsoft.VSTS.Scheduling.TargetDate")),
-                "devops_url": f"{org}/{proj}/_workitems/edit/{f.get('id')}",
-                "est": 0, "done": 0, "rem": 0,
-                "task_count": 0, "done_count": 0,
-            }
-            all_features.append(feat_obj)
+    feats = cl.get_features_for_pi("HRM", pi_name)
+    for f in feats:
+        fields      = f.get("fields", {})
+        raw_state   = fields.get("System.State", "")
+        consolidated = PI_STATUS_MAP.get(raw_state)
+        if not consolidated:
+            continue
+        af       = fields.get("System.AssignedTo", {})
+        assignee = af.get("displayName", "Unassigned") if isinstance(af, dict) else str(af or "Unassigned")
+        feat_obj = {
+            "id":          f.get("id"),
+            "title":       fields.get("System.Title", ""),
+            "state":       raw_state,
+            "status":      consolidated,
+            "assignee":    assignee,
+            "priority":    fields.get("Microsoft.VSTS.Common.Priority", 99),
+            "pi_priority": fields.get("Custom.PIPriorityNo", 0),
+            "po_priority": fields.get("Custom.POLevelPriority", 0),
+            "tags":        fields.get("System.Tags", "") or "",
+            "area":        fields.get("System.AreaPath", ""),
+            "project":     "HRM",
+            "start_date":  pd_(fields.get("Microsoft.VSTS.Scheduling.StartDate")),
+            "end_date":    pd_(fields.get("Microsoft.VSTS.Scheduling.TargetDate")),
+            "devops_url":  f"{org}/HRM/_workitems/edit/{f.get('id')}",
+            "est": 0, "done": 0, "rem": 0,
+            "task_count": 0, "done_count": 0,
+        }
+        all_features.append(feat_obj)
     result["features"] = all_features
     return result
 
@@ -660,164 +680,6 @@ def load_pm_action_items(org, pat, all_data):
                         "devops_url": item.get("devops_url", ""),
                     })
     return actions
-
-# ─────────────────────────────────────────────────────────────────
-# GEMINI AI
-# ─────────────────────────────────────────────────────────────────
-def build_pi_context(pi_data, all_sprint_data):
-    """Build a concise PI context for Gemini — kept short to avoid token/rate issues."""
-    features  = pi_data.get("features", [])
-    pi_name   = pi_data.get("pi_name", "N/A")
-    pi_end    = pi_data.get("pi_end", "?")
-    remain_wd = pi_data.get("remaining_working_days", 0)
-    total_wd  = pi_data.get("total_working_days", 0)
-
-    # Feature status summary
-    from collections import Counter
-    status_counts = Counter(f["status"] for f in features)
-    feat_summary  = ", ".join(f"{s}: {c}" for s, c in status_counts.most_common())
-    at_risk = [f["title"][:40] for f in features
-               if f["status"] in ("On Hold", "Blocked by Dependent Bugs")]
-
-    # Sprint team summary
-    team_lines = []
-    all_items  = []
-    for td in all_sprint_data:
-        all_items.extend(td.get("items", []))
-        team_lines.append(
-            f"  {td['team']}: {td.get('health','').upper()} | "
-            f"{td.get('comp_pct',0)}% done | "
-            f"{td.get('high_count',0)} high-spill | "
-            f"{td.get('over_count',0)} overburn | "
-            f"{td.get('blocked_count',0)} blocked"
-        )
-
-    # Top 5 high-spill items only
-    high_spill = [i for i in all_items if i.get("spill_risk") == "high"][:5]
-    spill_lines = [
-        f"  - [{i.get('state')}] {i.get('title','')[:45]} ({i.get('team','')})"
-        for i in high_spill
-    ]
-
-    total_est  = sum(i.get("est",0) or 0 for i in all_items)
-    total_done = sum(i.get("done",0) or 0 for i in all_items)
-    comp_pct   = round(total_done / total_est * 100) if total_est > 0 else 0
-
-    ctx = f"""PI: {pi_name} | End: {pi_end} | {remain_wd}/{total_wd} working days left
-Sprint completion: {comp_pct}% ({total_done:.0f}h of {total_est:.0f}h)
-Features ({len(features)} total): {feat_summary}
-At-risk features: {', '.join(at_risk) if at_risk else 'None'}
-
-TEAM HEALTH:
-{chr(10).join(team_lines)}
-
-TOP HIGH-SPILL ITEMS:
-{chr(10).join(spill_lines) if spill_lines else '  None'}"""
-
-    return ctx
-
-GREETING_WORDS = {"hi","hello","hey","hiya","howdy","yo","sup","morning","afternoon","evening","greetings","thanks","thank","ok","okay","sure","great","good","nice","cool","got it","understood","noted"}
-
-SIMPLE_QUESTION_WORDS = {"what","who","when","how","why","which","can","could","should","would","is","are","will","does","do"}
-
-def is_greeting(text):
-    """Detect simple greetings that don't need an API call."""
-    clean = text.lower().strip().rstrip("!.,?").strip()
-    words = set(clean.split())
-    # Pure greeting if all words are greeting words and message is short
-    return len(clean) < 30 and words and words.issubset(GREETING_WORDS)
-
-def needs_full_context(text):
-    """Decide if we need the full PI data context or can use a minimal prompt."""
-    lower = text.lower()
-    pi_keywords = ["pi","sprint","team","feature","spill","overburn","block","risk","escalat",
-                   "deliver","complet","forecast","velocity","burn","late","miss","done",
-                   "payroll","leave","recruit","performance","employee","cloud","beta",
-                   "echo","gamma","hyper","commanders","brigade","guardians","hackers",
-                   "confidence","health","status","update","report","standup","meeting"]
-    return any(kw in lower for kw in pi_keywords)
-
-def call_gemini(prompt, context="", key=""):
-    import time
-
-    if not key:
-        return "⚠️ Gemini API key not configured. Add it under [gemini] api_key in Streamlit Secrets."
-
-    # ── Instant local reply for greetings — no API call needed ──
-    if is_greeting(prompt):
-        pi_name = context.split("|")[0].replace("PI:","").strip() if context else "26R1"
-        return (f"Hello! I'm your PI assistant for {pi_name}. "
-                f"Ask me about sprint risks, feature status, team performance, "
-                f"or use the quick buttons above to get started.")
-
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-
-    # ── Enforce minimum gap between API calls ──
-    last_call = st.session_state.get("_gemini_last_call", 0)
-    elapsed = time.time() - last_call
-    if elapsed < 4:
-        time.sleep(4 - elapsed)
-
-    # ── Use full context only when question is PI-related ──
-    if needs_full_context(prompt):
-        ctx_trimmed = context[:2000] if len(context) > 2000 else context
-        system = (
-            "You are a PI execution assistant for an Agile Release Train managing 5 Scrum teams "
-            "on the HRM project. Be concise, direct, and actionable. "
-            "Use bullet points for lists. Bold key risks with **asterisks**.\n\n"
-            f"LIVE DATA:\n{ctx_trimmed}"
-        )
-    else:
-        # Lightweight system prompt — no PI data needed for general questions
-        system = (
-            "You are a helpful PI/Agile assistant for an HRM software project. "
-            "Answer concisely. If the question is about specific live data "
-            "(team names, item counts, features), say you need a more specific question "
-            "and suggest they use one of the quick prompt buttons."
-        )
-
-    payload = {
-        "contents": [{"parts": [{"text": f"{system}\n\nQuestion: {prompt}"}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 600}
-    }
-
-    for attempt in range(2):
-        try:
-            st.session_state["_gemini_last_call"] = time.time()
-            r = requests.post(f"{url}?key={key}", json=payload, timeout=25)
-            if r.status_code == 429:
-                if attempt == 0:
-                    time.sleep(20)
-                    continue
-                retry_after = 60
-                try:
-                    retry_after = int(r.headers.get("Retry-After", 60))
-                except Exception:
-                    pass
-                return (
-                    f"⚠️ **Rate limit reached** (Gemini free tier: 15 requests/min).\n\n"
-                    f"Please wait about **{retry_after} seconds** then ask again.\n\n"
-                    f"*Tip: avoid sending multiple messages quickly — wait for each response first.*"
-                )
-            r.raise_for_status()
-            data = r.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return "⚠️ Gemini returned an empty response. Please try again."
-            return candidates[0]["content"]["parts"][0]["text"]
-        except requests.exceptions.Timeout:
-            return "⚠️ Gemini took too long to respond. Please try again."
-        except requests.exceptions.HTTPError as e:
-            return f"⚠️ Gemini API error {r.status_code}: {str(e)[:120]}"
-        except Exception as e:
-            return f"⚠️ Unexpected error: {str(e)[:120]}"
-    return "⚠️ Gemini did not respond. Please wait 30 seconds and try again."
-
-def get_proactive_insights(context, key):
-    prompt = """Analyse the PI and sprint data and give me exactly 3 proactive insights I should act on TODAY.
-Format each as: [SEVERITY: CRITICAL/HIGH/MEDIUM] **Title** — explanation and recommended action.
-Be specific with numbers from the data. Maximum 2 sentences per insight."""
-    return call_gemini(prompt, context, key)
 
 # ─────────────────────────────────────────────────────────────────
 # DEMO DATA GENERATORS
@@ -895,15 +757,12 @@ def gen_demo_sprint():
 
 def gen_demo_pi():
     today = date.today()
-    pi_start = date(2026, 1, 5)
-    pi_end   = date(2026, 6, 5)
     features = [
         {"id": 110001, "title": "Employee Info Module v2",  "state": "Dev In Progress",     "status": "Development",     "assignee": "Team A", "priority": 1, "pi_priority": 1,  "po_priority": 2,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,3,31), "est": 320, "done": 290, "rem": 30,  "task_count": 18, "done_count": 15, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110001", "tags": "26R1", "area": "HRM\\Echo Engineers"},
         {"id": 110002, "title": "Payroll Engine",            "state": "QA In Progress",      "status": "Testing",         "assignee": "Team B", "priority": 1, "pi_priority": 2,  "po_priority": 1,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,5,15), "est": 480, "done": 200, "rem": 340, "task_count": 24, "done_count": 10, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110002", "tags": "26R1", "area": "HRM\\Code Commanders"},
         {"id": 110003, "title": "Leave Management",          "state": "QA Pending",          "status": "Testing",         "assignee": "Team C", "priority": 2, "pi_priority": 3,  "po_priority": 3,  "project": "HRM",        "start_date": date(2026,2,1),  "end_date": date(2026,5,22), "est": 280, "done": 170, "rem": 150, "task_count": 16, "done_count": 9,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110003", "tags": "26R1", "area": "HRM\\Beta Brigade"},
         {"id": 110004, "title": "Performance Portal",        "state": "Dev Completed",       "status": "Development",     "assignee": "Team D", "priority": 2, "pi_priority": 4,  "po_priority": 4,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,5,15), "est": 240, "done": 220, "rem": 10,  "task_count": 14, "done_count": 13, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110004", "tags": "26R1", "area": "HRM\\Gamma Guardians"},
         {"id": 110005, "title": "Recruitment Flow",          "state": "Dev In Progress",     "status": "Development",     "assignee": "Team E", "priority": 2, "pi_priority": 5,  "po_priority": 5,  "project": "HRM",        "start_date": date(2026,2,15), "end_date": date(2026,6,5),  "est": 360, "done": 136, "rem": 280, "task_count": 20, "done_count": 7,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110005", "tags": "26R1", "area": "HRM\\Hyper Hackers"},
-        {"id": 110006, "title": "Cloud Integration API",     "state": "Solutioning Completed","status": "Solutioning",    "assignee": "Team F", "priority": 3, "pi_priority": 6,  "po_priority": 6,  "project": "Cloud-Team",  "start_date": date(2026,3,1),  "end_date": date(2026,6,5),  "est": 200, "done": 60,  "rem": 160, "task_count": 12, "done_count": 3,  "devops_url": "https://dev.azure.com/YOUR_ORG/Cloud-Team/_workitems/edit/110006", "tags": "26R1", "area": "Cloud-Team"},
         {"id": 110007, "title": "Reporting Module",          "state": "Dev In Progress",     "status": "Development",     "assignee": "Team A", "priority": 3, "pi_priority": 7,  "po_priority": 7,  "project": "HRM",        "start_date": date(2026,3,15), "end_date": date(2026,6,5),  "est": 180, "done": 90,  "rem": 110, "task_count": 10, "done_count": 5,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110007", "tags": "26R1", "area": "HRM\\Echo Engineers"},
         {"id": 110008, "title": "Data Migration Scripts",   "state": "Release Ready",        "status": "Release Ready",   "assignee": "Team B", "priority": 1, "pi_priority": 8,  "po_priority": 3,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,4,30), "est": 120, "done": 118, "rem": 0,   "task_count": 8,  "done_count": 8,  "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110008", "tags": "26R1", "area": "HRM\\Code Commanders"},
         {"id": 110009, "title": "SSO Integration",           "state": "Done",                "status": "Done",            "assignee": "Team C", "priority": 2, "pi_priority": 9,  "po_priority": 8,  "project": "HRM",        "start_date": date(2026,1,5),  "end_date": date(2026,3,15), "est": 160, "done": 158, "rem": 0,   "task_count": 10, "done_count": 10, "devops_url": "https://dev.azure.com/YOUR_ORG/HRM/_workitems/edit/110009", "tags": "26R1", "area": "HRM\\Beta Brigade"},
@@ -911,10 +770,10 @@ def gen_demo_pi():
     ]
     return {
         "pi_name": "26R1",
-        "pi_start": pi_start,
-        "pi_end":   pi_end,
-        "total_working_days":     working_days_between(pi_start, pi_end),
-        "remaining_working_days": working_days_remaining(pi_end),
+        "pi_start": date(2026, 3, 18),
+        "pi_end":   date(2026, 6, 11),
+        "total_working_days":     working_days_between(date(2026, 3, 18), date(2026, 6, 11)),
+        "remaining_working_days": working_days_remaining(date(2026, 6, 11)),
         "epics": [],
         "features": features,
     }
@@ -1057,7 +916,7 @@ def render_pi_tab(pi_data, all_sprint_data):
         <div style="font-size:12px;color:#6b7280;margin-top:3px">
           {date_str} &nbsp;·&nbsp; {total_wd} working days total &nbsp;·&nbsp;
           <span style="color:#dc2626;font-weight:600">{remain_wd} days remaining</span>
-          &nbsp;·&nbsp; HRM &amp; Cloud-Team projects
+          &nbsp;·&nbsp; HRM Project
           &nbsp;·&nbsp; Updated: {datetime.now().strftime('%d %b %Y %H:%M')}
         </div>
       </div>
@@ -1104,7 +963,6 @@ def render_pi_tab(pi_data, all_sprint_data):
 
     # ── KPI ROW ──
     total_overrun = sum(i.get("overrun", 0) for i in overburn_all)
-    st.markdown("<div style='padding:12px 24px 0'>", unsafe_allow_html=True)
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     with k1:
         st.markdown(metric_html("PI confidence", f"{score}/100",
@@ -1124,13 +982,10 @@ def render_pi_tab(pi_data, all_sprint_data):
     with k6:
         st.markdown(metric_html("Blocked items", str(len(blocked_all)),
             f"across {len(all_sprint_data)} teams", "#7c3aed"), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── MAIN CONTENT + CHAT PANEL ──
-    st.markdown("<div style='padding:12px 24px 0'>", unsafe_allow_html=True)
-    main_col, chat_col = st.columns([3, 1])
-
-    with main_col:
+    # ── MAIN CONTENT ──
+    main_col = st  # full width
+    if True:
         # ── FEATURE COMMITMENT TRACKER ──
         st.markdown(card_open(), unsafe_allow_html=True)
         st.markdown(section_header("📋 PI Feature Commitment Tracker",
@@ -1252,7 +1107,6 @@ def render_pi_tab(pi_data, all_sprint_data):
                             <span style="color:#9ca3af">{ri.get('state','')} · {ri.get('assignee','')}</span></div>
                           <a href="{ri.get('devops_url','')}" target="_blank" style="color:#2563eb;font-size:10px">↗</a>
                         </div>""", unsafe_allow_html=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
                     if st.button(f"Full sprint detail →", key=f"pi_full_{team}"):
                         st.session_state.update({"active_tab": "sprint", "selected_team": team,
                                                   "view": "team_detail"})
@@ -1368,202 +1222,6 @@ def render_pi_tab(pi_data, all_sprint_data):
 
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-        # ── GEMINI PROACTIVE INSIGHTS ──
-        gemini_key = st.session_state.get("gemini_key","")
-        ctx = build_pi_context(pi_data, all_sprint_data)
-        if gemini_key:
-            st.markdown(card_open(extra_style="border-left:3px solid #2563eb;border-radius:0 10px 10px 0;"),
-                        unsafe_allow_html=True)
-            st.markdown(f"""
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-              <div style="width:28px;height:28px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:14px">✨</div>
-              <div style="font-size:14px;font-weight:700">Gemini AI — Proactive Insights</div>
-              <span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:12px;padding:2px 8px;font-size:10px;font-weight:600">Data-aware</span>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Only generate when explicitly requested — avoids 429 on every page load
-            if "pi_insights" in st.session_state and st.session_state["pi_insights"]:
-                st.markdown(st.session_state["pi_insights"].replace("\n","<br>"),
-                            unsafe_allow_html=True)
-                if st.button("🔄 Refresh insights", key="refresh_insights"):
-                    del st.session_state["pi_insights"]
-                    st.rerun()
-            else:
-                st.markdown("""
-                <div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;
-                     padding:12px;font-size:12px;color:#6b7280;line-height:1.6">
-                  Click below to generate AI insights from your live PI data.
-                  Gemini will analyse all 5 teams and surface the top 3 actions for today.
-                </div>""", unsafe_allow_html=True)
-                if st.button("✨ Generate AI insights now", key="gen_insights", use_container_width=True):
-                    with st.spinner("Gemini is analysing your PI data..."):
-                        st.session_state["pi_insights"] = get_proactive_insights(ctx, gemini_key)
-                    st.rerun()
-            st.markdown(card_close(), unsafe_allow_html=True)
-
-    # ── GEMINI AI CHAT PANEL (right column) ──
-    with chat_col:
-        st.markdown(f"""
-        <div style="background:#ffffff;border:1px solid #e8ecf0;border-radius:10px;overflow:hidden;
-             position:sticky;top:0">
-          <div style="background:#f8fafc;border-bottom:1px solid #e8ecf0;padding:10px 14px;
-               display:flex;align-items:center;gap:8px">
-            <div style="width:28px;height:28px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:14px">✨</div>
-            <div>
-              <div style="font-size:13px;font-weight:700">PI Assistant</div>
-              <div style="font-size:10px;color:#6b7280">Gemini 2.0 Flash · data-aware</div>
-            </div>
-            <div style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:{'#16a34a' if gemini_key else '#dc2626'}"></div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # PM check section
-        st.markdown(f"""
-        <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;
-             padding:10px 12px;margin-top:8px">
-          <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:4px">
-            📬 PM Action Required
-          </div>
-          <div style="font-size:11px;color:#78350f">
-            Items with comments from Ishan/Rohan or flagged keywords appear here.<br>
-            <span style="color:#6b7280">(Loads when connected to Azure DevOps)</span>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Show PM actions if loaded
-        pm_actions = st.session_state.get("pm_actions", [])
-        if pm_actions:
-            for a in pm_actions[:5]:
-                from_c = "#dc2626" if a.get("from_key") else "#d97706"
-                st.markdown(f"""
-                <div style="background:#fff;border:1px solid #e8ecf0;border-left:3px solid {from_c};
-                     border-radius:0 8px 8px 0;padding:8px;margin-top:6px;font-size:11px">
-                  <div style="font-weight:600;color:#1a202c">{a['title'][:45]}</div>
-                  <div style="color:#6b7280;margin-top:2px">From: {a['author']} · {a['team']}</div>
-                  <div style="color:#374151;margin-top:4px;font-style:italic">"{a['comment'][:120]}..."</div>
-                  <a href="{a['devops_url']}" target="_blank" style="color:#2563eb;font-size:10px">Open in DevOps ↗</a>
-                </div>
-                """, unsafe_allow_html=True)
-
-        # Quick prompt buttons — disabled during cooldown or when pending
-        import time as _time
-        _last = st.session_state.get("_gemini_last_call_ui", 0)
-        _since = _time.time() - _last
-        _cooldown = 15  # seconds — safe for free tier
-        _is_pending = bool(st.session_state.get("pi_chat_pending"))
-        _in_cooldown = 0 < _since < _cooldown
-        _ready = not _is_pending and not _in_cooldown
-
-        if not _ready:
-            if _in_cooldown:
-                _rem = int(_cooldown - _since) + 1
-                st.markdown(
-                    f'<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;'
-                    f'padding:8px 12px;font-size:12px;color:#92400e;margin-bottom:6px">'
-                    f'⏳ <b>Ready in {_rem}s</b> — waiting for Gemini rate limit to clear</div>',
-                    unsafe_allow_html=True)
-            else:
-                st.markdown(
-                    '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;'
-                    'padding:8px 12px;font-size:12px;color:#1d4ed8;margin-bottom:6px">'
-                    '✨ Gemini is thinking...</div>',
-                    unsafe_allow_html=True)
-
-        quick_prompts = [
-            ("⚠️ Escalate today?",   "What should I escalate to leadership today based on the PI data? Be specific with team names and item counts."),
-            ("📄 Draft PI update",   "Draft a concise PI review status update I can share with stakeholders. Include overall confidence, feature status, and top 2 risks."),
-            ("📉 Beta Brigade low?", "Analyse Beta Brigade's performance. What is causing their low delivery and what should the Scrum Master do?"),
-            ("🎯 Hit PI end date?",  f"Based on current velocity and remaining work, will we complete all PI {pi_name} commitments by {pi_end}? Which features are at risk?"),
-        ]
-        for label, prompt in quick_prompts:
-            # Render disabled-style button when in cooldown
-            if not _ready:
-                st.markdown(
-                    f'<div style="background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);'
-                    f'border-radius:6px;padding:7px 12px;font-size:12px;color:var(--color-text-secondary);'
-                    f'margin-bottom:4px;opacity:.5;cursor:not-allowed">{label}</div>',
-                    unsafe_allow_html=True)
-            else:
-                if st.button(label, key=f"qp_{label[:12]}", use_container_width=True):
-                    st.session_state.setdefault("pi_chat_messages", [])
-                    st.session_state["pi_chat_messages"].append({"role": "user", "content": prompt})
-                    st.session_state["pi_chat_pending"] = prompt
-                    st.rerun()
-
-        # Chat history display
-        messages = st.session_state.get("pi_chat_messages", [])
-        if not messages:
-            st.markdown("""
-            <div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;
-                 padding:10px;font-size:11px;color:#6b7280;line-height:1.6;margin-top:8px">
-              Ask me anything about PI progress, team performance, feature risks,
-              or use the quick buttons above.
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            for msg in messages[-8:]:
-                if msg["role"] == "user":
-                    st.markdown(
-                        f'<div style="background:#eff6ff;border-radius:8px;padding:8px 10px;'
-                        f'font-size:11px;color:#1e3a5f;margin:4px 0;text-align:right">'
-                        f'{msg["content"][:200]}</div>',
-                        unsafe_allow_html=True)
-                else:
-                    clean = msg["content"].replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-                    st.markdown(
-                        f'<div style="background:#f0f7ff;border-left:3px solid #2563eb;'
-                        f'border-radius:0 8px 8px 0;padding:8px 10px;'
-                        f'font-size:11px;color:#1a202c;margin:4px 0;line-height:1.6">'
-                        f'<div style="font-size:9px;font-weight:700;color:#2563eb;margin-bottom:4px">✨ GEMINI</div>'
-                        f'{clean[:800]}</div>',
-                        unsafe_allow_html=True)
-
-        # Process pending Gemini call
-        if st.session_state.get("pi_chat_pending"):
-            pending = st.session_state.pop("pi_chat_pending")
-            import time as _tc
-            # Greetings respond instantly — no API call, no cooldown needed
-            if is_greeting(pending):
-                response = call_gemini(pending, ctx, gemini_key)
-                st.session_state.setdefault("pi_chat_messages", [])
-                st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
-                st.rerun()
-            else:
-                st.session_state["_gemini_last_call_ui"] = _tc.time()  # start cooldown NOW
-                with st.spinner("✨ Gemini thinking — please wait..."):
-                    response = call_gemini(pending, ctx, gemini_key)
-                st.session_state.setdefault("pi_chat_messages", [])
-                st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
-                st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── CHAT INPUT — must be at page level, NOT inside st.columns ──
-    if gemini_key:
-        import time as _t
-        _last2   = st.session_state.get("_gemini_last_call_ui", 0)
-        _since2  = _t.time() - _last2
-        _cooldown2 = 15
-        _in_cd   = 0 < _since2 < _cooldown2
-        _pending = bool(st.session_state.get("pi_chat_pending"))
-
-        if _pending:
-            st.info("✨ Gemini is thinking... please wait")
-        elif _in_cd:
-            _rem2 = int(_cooldown2 - _since2) + 1
-            st.info(f"⏳ Ready in **{_rem2}s** — Gemini free tier cooldown")
-            _t.sleep(1)
-            st.rerun()
-        else:
-            user_input = st.chat_input("Ask your PI assistant...", key="pi_chat_input")
-            if user_input and user_input.strip():
-                st.session_state.setdefault("pi_chat_messages", [])
-                st.session_state["pi_chat_messages"].append({"role": "user", "content": user_input})
-                st.session_state["pi_chat_pending"] = user_input
-                st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1647,25 +1305,37 @@ def render_team_card(td, col):
         """, unsafe_allow_html=True)
 
         metrics = [
-            ("🔴 High Spill", hc, "high_spill", "#fef2f2", "#dc2626"),
-            ("🟡 Watch",      wc, "watch",      "#fffbeb", "#d97706"),
-            ("🔥 Overburn",   oc, "overburn",   "#fff7ed", "#ea580c"),
-            ("🚧 Blocked",    bk, "blocked",    "#f5f3ff", "#7c3aed"),
-            ("📋 No Est",     uc, "unestimated","#ecfeff", "#0891b2"),
-            ("📅 Date Issue", dc_,"date_issue", "#fdf2f8", "#db2777"),
+            ("🔴 High Spill", hc,  "#fef2f2", "#dc2626"),
+            ("🟡 Watch",      wc,  "#fffbeb", "#d97706"),
+            ("🔥 Overburn",   oc,  "#fff7ed", "#ea580c"),
+            ("🚧 Blocked",    bk,  "#f5f3ff", "#7c3aed"),
+            ("📋 No Est",     uc,  "#ecfeff", "#0891b2"),
+            ("📅 Date Issue", dc_, "#fdf2f8", "#db2777"),
         ]
-        # Render all 6 metric boxes as pure HTML — no buttons inside columns
-        cells_html = ""
-        for label, count, key_suffix, bg, color in metrics:
-            cells_html += f"""
-            <div style="background:{bg};border-radius:6px;padding:7px 4px;text-align:center">
-              <div style="font-size:20px;font-weight:800;color:{color}">{count}</div>
-              <div style="font-size:9px;color:#6b7280;font-weight:600">{label}</div>
-            </div>"""
-        st.markdown(f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:6px">
-          {cells_html}
-        </div>""", unsafe_allow_html=True)
+        # Row 1 — first 3 metrics
+        r1 = st.columns(3)
+        for idx in range(3):
+            label, count, bg, color = metrics[idx]
+            with r1[idx]:
+                st.markdown(
+                    f'<div style="background:{bg};border-radius:6px;padding:7px 4px;'
+                    f'text-align:center;margin-bottom:3px">'
+                    f'<div style="font-size:20px;font-weight:800;color:{color}">{count}</div>'
+                    f'<div style="font-size:9px;color:#6b7280;font-weight:600">{label}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+        # Row 2 — last 3 metrics
+        r2 = st.columns(3)
+        for idx in range(3, 6):
+            label, count, bg, color = metrics[idx]
+            with r2[idx - 3]:
+                st.markdown(
+                    f'<div style="background:{bg};border-radius:6px;padding:7px 4px;'
+                    f'text-align:center;margin-bottom:3px">'
+                    f'<div style="font-size:20px;font-weight:800;color:{color}">{count}</div>'
+                    f'<div style="font-size:9px;color:#6b7280;font-weight:600">{label}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
 
         # Single row of action buttons — stable, no per-metric columns
         btn_cols = st.columns(3)
@@ -2125,14 +1795,6 @@ def render_sidebar():
                 else:
                     st.error("Fill all fields")
 
-        gemini_key = st.session_state.get("gemini_key","")
-        if not gemini_key:
-            gk = st.text_input("Gemini API Key", value="", type="password", key="gemini_input")
-            if gk:
-                st.session_state["gemini_key"] = gk
-        else:
-            st.success("✅ Gemini connected")
-
         st.markdown("---")
 
         # PI selector
@@ -2186,8 +1848,8 @@ def main():
         "all_data": [], "pi_data": {},
         "show_connect": False, "show_nine_box": False,
         "org_url": "https://dev.azure.com/YOUR_ORG", "project": "HRM", "pat": "",
-        "gemini_key": "", "current_pi": "26R1",
-        "pi_chat_messages": [], "pm_actions": [],
+        "current_pi": "26R1",
+        "pm_actions": [],
         "active_tab": "pi",
     }
     for k, v in defaults.items():
@@ -2262,11 +1924,8 @@ def main():
             st.session_state["all_data"] = all_data
             st.session_state["loaded"]   = True
 
-            # Load PM action items in background (non-blocking, best-effort)
-            try:
-                st.session_state["pm_actions"] = load_pm_action_items(org, pat, all_data)
-            except Exception:
-                pass
+            # PM action items loaded separately on demand
+            st.session_state.setdefault("pm_actions", [])
         else:
             # Landing page
             st.markdown("""
