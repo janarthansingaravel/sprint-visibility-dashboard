@@ -556,14 +556,13 @@ def load_team(org, proj, pat, team):
 # ─────────────────────────────────────────────────────────────────
 # PI DATA LOADER
 # ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
 def load_pi_data(org, pat, pi_name, pi_field="Custom.PI", _cache_v=0):
     cl = DevOpsClient(org, pat)
     result = {"pi_name": pi_name, "epics": [], "features": [], "pi_start": None, "pi_end": None,
               "total_working_days": 0, "remaining_working_days": 0}
 
     # ── Get PI Epic dates from Azure DevOps ──
-    epic_ids = cl.get_pi_epics("HRM", pi_name)
+    epic_ids = cl.get_pi_epics("HRM", pi_name) or []
     if epic_ids:
         epics = cl.get_wi_batch(epic_ids, [
             "System.Id", "System.Title", "System.State",
@@ -583,10 +582,18 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI", _cache_v=0):
                 result["remaining_working_days"] = working_days_remaining(e2)
                 break
 
-    # ── Get Features — HRM only ──
+    # ── Get Features — HRM only, strictly Feature type, exclude Epic IDs ──
     all_features = []
+    epic_ids_set = set(epic_ids)  # never include these in feature list
     feats = cl.get_features_for_pi("HRM", pi_name)
     for f in feats:
+        # Double-safety: exclude any Epic IDs and non-Feature types
+        if f.get("id") in epic_ids_set:
+            continue
+        fields      = f.get("fields", {})
+        wi_type     = fields.get("System.WorkItemType", "")
+        if wi_type and wi_type != "Feature":
+            continue
         fields      = f.get("fields", {})
         raw_state    = fields.get("System.State", "")
         consolidated = PI_STATUS_MAP.get(raw_state)
@@ -2133,39 +2140,29 @@ def main():
             all_data = [None] * len(TEAMS)
             completed_count = 0
 
-            # Load all 5 teams + PI data IN PARALLEL
+            # Load all 5 teams IN PARALLEL
             def _load_team_wrapper(idx_team):
                 idx, team = idx_team
                 return idx, load_team(org, proj, pat, team)
 
-            def _load_pi_wrapper(_):
-                cache_v = st.session_state.get("cache_version", 0)
-                return "pi", load_pi_data(org, pat, pi_name, pi_field, cache_v)
-
             tasks = [(i, team) for i, team in enumerate(TEAMS)]
 
-            with ThreadPoolExecutor(max_workers=6) as ex:
-                # Submit all team loads + PI load simultaneously
+            with ThreadPoolExecutor(max_workers=5) as ex:
                 futures = {ex.submit(_load_team_wrapper, t): t[1] for t in tasks}
-                futures[ex.submit(_load_pi_wrapper, None)] = "PI Features"
 
                 for future in as_completed(futures):
                     task_label = futures[future]
                     try:
                         result = future.result()
-                        if result[0] == "pi":
-                            st.session_state["pi_data"]   = result[1]
-                            st.session_state["pi_loaded"] = True
-                        else:
-                            idx, td = result
-                            all_data[idx] = td
-                            completed_count += 1
-                            pct = completed_count / len(TEAMS)
-                            prog.progress(pct, f"Loaded {td.get('team','')} ✓")
-                            status_ph.markdown(
-                                f'<div style="font-size:11px;color:#6b7280">'
-                                f'Loading in parallel… {completed_count}/{len(TEAMS)} teams done</div>',
-                                unsafe_allow_html=True)
+                        idx, td = result
+                        all_data[idx] = td
+                        completed_count += 1
+                        pct = completed_count / len(TEAMS)
+                        prog.progress(pct, f"Loaded {td.get('team','')} ✓")
+                        status_ph.markdown(
+                            f'<div style="font-size:11px;color:#6b7280">'
+                            f'Loading in parallel… {completed_count}/{len(TEAMS)} teams done</div>',
+                            unsafe_allow_html=True)
                     except Exception as e:
                         st.warning(f"Error loading {task_label}: {str(e)[:80]}")
 
@@ -2196,11 +2193,24 @@ def main():
                     st.session_state.update({"use_demo":True,"loaded":False}); st.rerun()
             return
 
-    # ── PI DATA LOADING (demo only — live loads in parallel above) ──
+    # ── PI DATA LOADING — always load fresh when not loaded ──
     if not st.session_state.get("pi_loaded"):
         if st.session_state.get("use_demo"):
             st.session_state["pi_data"]   = gen_demo_pi()
             st.session_state["pi_loaded"] = True
+        elif st.session_state.get("pat") and "YOUR_ORG" not in st.session_state.get("org_url",""):
+            pi_name  = st.session_state.get("current_pi", "26R1")
+            pi_field = st.session_state.get("pi_field_name", "Custom.PI")
+            cache_v  = st.session_state.get("cache_version", 0)
+            with st.spinner(f"Loading PI {pi_name} features from Azure DevOps..."):
+                pi_data_fresh = load_pi_data(
+                    st.session_state["org_url"],
+                    st.session_state["pat"],
+                    pi_name, pi_field, cache_v
+                )
+            st.session_state["pi_data"]   = pi_data_fresh
+            st.session_state["pi_loaded"] = True
+            st.rerun()
 
     all_data = st.session_state["all_data"]
     pi_data  = st.session_state.get("pi_data", {})
