@@ -716,39 +716,78 @@ TOP HIGH-SPILL ITEMS:
 
     return ctx
 
+GREETING_WORDS = {"hi","hello","hey","hiya","howdy","yo","sup","morning","afternoon","evening","greetings","thanks","thank","ok","okay","sure","great","good","nice","cool","got it","understood","noted"}
+
+SIMPLE_QUESTION_WORDS = {"what","who","when","how","why","which","can","could","should","would","is","are","will","does","do"}
+
+def is_greeting(text):
+    """Detect simple greetings that don't need an API call."""
+    clean = text.lower().strip().rstrip("!.,?").strip()
+    words = set(clean.split())
+    # Pure greeting if all words are greeting words and message is short
+    return len(clean) < 30 and words and words.issubset(GREETING_WORDS)
+
+def needs_full_context(text):
+    """Decide if we need the full PI data context or can use a minimal prompt."""
+    lower = text.lower()
+    pi_keywords = ["pi","sprint","team","feature","spill","overburn","block","risk","escalat",
+                   "deliver","complet","forecast","velocity","burn","late","miss","done",
+                   "payroll","leave","recruit","performance","employee","cloud","beta",
+                   "echo","gamma","hyper","commanders","brigade","guardians","hackers",
+                   "confidence","health","status","update","report","standup","meeting"]
+    return any(kw in lower for kw in pi_keywords)
+
 def call_gemini(prompt, context="", key=""):
     import time
+
     if not key:
         return "⚠️ Gemini API key not configured. Add it under [gemini] api_key in Streamlit Secrets."
+
+    # ── Instant local reply for greetings — no API call needed ──
+    if is_greeting(prompt):
+        pi_name = context.split("|")[0].replace("PI:","").strip() if context else "26R1"
+        return (f"Hello! I'm your PI assistant for {pi_name}. "
+                f"Ask me about sprint risks, feature status, team performance, "
+                f"or use the quick buttons above to get started.")
+
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
-    # Enforce minimum gap between requests to avoid 429
+    # ── Enforce minimum gap between API calls ──
     last_call = st.session_state.get("_gemini_last_call", 0)
     elapsed = time.time() - last_call
-    if elapsed < 5:  # enforce 5s minimum between calls
-        time.sleep(5 - elapsed)
+    if elapsed < 4:
+        time.sleep(4 - elapsed)
 
-    # Trim context to ~2000 chars to keep tokens low and responses fast
-    ctx_trimmed = context[:2000] if len(context) > 2000 else context
+    # ── Use full context only when question is PI-related ──
+    if needs_full_context(prompt):
+        ctx_trimmed = context[:2000] if len(context) > 2000 else context
+        system = (
+            "You are a PI execution assistant for an Agile Release Train managing 5 Scrum teams "
+            "on the HRM project. Be concise, direct, and actionable. "
+            "Use bullet points for lists. Bold key risks with **asterisks**.\n\n"
+            f"LIVE DATA:\n{ctx_trimmed}"
+        )
+    else:
+        # Lightweight system prompt — no PI data needed for general questions
+        system = (
+            "You are a helpful PI/Agile assistant for an HRM software project. "
+            "Answer concisely. If the question is about specific live data "
+            "(team names, item counts, features), say you need a more specific question "
+            "and suggest they use one of the quick prompt buttons."
+        )
 
-    system = (
-        "You are a PI execution assistant for an Agile Release Train. "
-        "You manage 5 Scrum teams on the HRM project. "
-        "Be concise, direct and actionable. Use bullet points. Bold key risks.\n\n"
-        f"LIVE DATA SUMMARY:\n{ctx_trimmed}"
-    )
     payload = {
         "contents": [{"parts": [{"text": f"{system}\n\nQuestion: {prompt}"}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 800}
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 600}
     }
 
     for attempt in range(2):
         try:
             st.session_state["_gemini_last_call"] = time.time()
-            r = requests.post(f"{url}?key={key}", json=payload, timeout=30)
+            r = requests.post(f"{url}?key={key}", json=payload, timeout=25)
             if r.status_code == 429:
                 if attempt == 0:
-                    time.sleep(20)   # wait 20s then retry once
+                    time.sleep(20)
                     continue
                 retry_after = 60
                 try:
@@ -758,7 +797,7 @@ def call_gemini(prompt, context="", key=""):
                 return (
                     f"⚠️ **Rate limit reached** (Gemini free tier: 15 requests/min).\n\n"
                     f"Please wait about **{retry_after} seconds** then ask again.\n\n"
-                    f"*Tip: avoid clicking quick prompts back-to-back — wait for each response first.*"
+                    f"*Tip: avoid sending multiple messages quickly — wait for each response first.*"
                 )
             r.raise_for_status()
             data = r.json()
@@ -767,12 +806,12 @@ def call_gemini(prompt, context="", key=""):
                 return "⚠️ Gemini returned an empty response. Please try again."
             return candidates[0]["content"]["parts"][0]["text"]
         except requests.exceptions.Timeout:
-            return "⚠️ Gemini took too long to respond (timeout). Please try again."
+            return "⚠️ Gemini took too long to respond. Please try again."
         except requests.exceptions.HTTPError as e:
             return f"⚠️ Gemini API error {r.status_code}: {str(e)[:120]}"
         except Exception as e:
             return f"⚠️ Unexpected error: {str(e)[:120]}"
-    return "⚠️ Gemini did not respond after retry. Please wait 30 seconds and try again."
+    return "⚠️ Gemini did not respond. Please wait 30 seconds and try again."
 
 def get_proactive_insights(context, key):
     prompt = """Analyse the PI and sprint data and give me exactly 3 proactive insights I should act on TODAY.
@@ -1486,29 +1525,36 @@ def render_pi_tab(pi_data, all_sprint_data):
         if st.session_state.get("pi_chat_pending"):
             pending = st.session_state.pop("pi_chat_pending")
             import time as _tc
-            st.session_state["_gemini_last_call_ui"] = _tc.time()  # start cooldown NOW
-            with st.spinner("✨ Gemini thinking — please wait..."):
+            # Greetings respond instantly — no API call, no cooldown needed
+            if is_greeting(pending):
                 response = call_gemini(pending, ctx, gemini_key)
-            st.session_state.setdefault("pi_chat_messages", [])
-            st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
-            st.rerun()
+                st.session_state.setdefault("pi_chat_messages", [])
+                st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
+                st.rerun()
+            else:
+                st.session_state["_gemini_last_call_ui"] = _tc.time()  # start cooldown NOW
+                with st.spinner("✨ Gemini thinking — please wait..."):
+                    response = call_gemini(pending, ctx, gemini_key)
+                st.session_state.setdefault("pi_chat_messages", [])
+                st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
+                st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ── CHAT INPUT — must be at page level, NOT inside st.columns ──
     if gemini_key:
         import time as _t
-        _last2 = st.session_state.get("_gemini_last_call_ui", 0)
-        _since2 = _t.time() - _last2
+        _last2   = st.session_state.get("_gemini_last_call_ui", 0)
+        _since2  = _t.time() - _last2
         _cooldown2 = 15
+        _in_cd   = 0 < _since2 < _cooldown2
+        _pending = bool(st.session_state.get("pi_chat_pending"))
 
-        if st.session_state.get("pi_chat_pending"):
-            # Already processing — show spinner, no input
+        if _pending:
             st.info("✨ Gemini is thinking... please wait")
-        elif 0 < _since2 < _cooldown2:
+        elif _in_cd:
             _rem2 = int(_cooldown2 - _since2) + 1
             st.info(f"⏳ Ready in **{_rem2}s** — Gemini free tier cooldown")
-            # Auto-rerun every second so the countdown updates
             _t.sleep(1)
             st.rerun()
         else:
