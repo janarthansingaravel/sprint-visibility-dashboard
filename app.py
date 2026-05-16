@@ -17,7 +17,7 @@ st.set_page_config(
     page_title="HRM Command Centre",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # ─────────────────────────────────────────────────────────────────
@@ -1066,13 +1066,64 @@ def render_pi_tab(pi_data, all_sprint_data):
           &nbsp;·&nbsp; HRM Project &nbsp;·&nbsp; Updated: {datetime.now().strftime('%d %b %Y %H:%M')}
         </div>
       </div>
-      <div style="background:{score_color};color:#fff;border-radius:50%;width:46px;height:46px;
-           display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">
-        <div style="font-size:16px;line-height:1">{score}</div>
-        <div style="font-size:8px;opacity:.85">SCORE</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="background:{score_color};color:#fff;border-radius:50%;width:46px;height:46px;
+             display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">
+          <div style="font-size:16px;line-height:1">{score}</div>
+          <div style="font-size:8px;opacity:.85">SCORE</div>
+        </div>
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Quick action buttons ──
+    qa1, qa2, qa3, qa4 = st.columns([1,1,1,5])
+    with qa1:
+        if st.button("🔃 Refresh data", key="pi_refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state["pi_loaded"] = False
+            st.session_state["loaded"]    = False
+            st.rerun()
+    with qa2:
+        if st.button("🩺 Run diagnostic", key="pi_diag", use_container_width=True):
+            st.session_state["show_pi_diag"] = True
+    with qa3:
+        if st.button("❌ Hide diag", key="pi_diag_hide", use_container_width=True):
+            st.session_state["show_pi_diag"] = False
+
+    # ── Inline diagnostic ──
+    if st.session_state.get("show_pi_diag", False):
+        org2 = st.session_state.get("org_url","")
+        pat2 = st.session_state.get("pat","")
+        pi2  = st.session_state.get("current_pi","26R1")
+        if pat2 and "YOUR_ORG" not in org2:
+            cl2 = DevOpsClient(org2, pat2)
+            with st.expander("🩺 Diagnostic results", expanded=True):
+                epic_ids2 = cl2.get_pi_epics("HRM", pi2)
+                st.write(f"**Epic IDs found:** {epic_ids2}")
+                err = st.session_state.get("_wiql_last_error","none")
+                st.write(f"**Last WIQL error:** {err}")
+
+                q_feat = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'HRM' AND [System.WorkItemType] = 'Feature' AND [Custom.PI] = '{pi2}'"
+                feat_ids2 = cl2._wiql("HRM", q_feat)
+                st.write(f"**Features via Custom.PI='{pi2}':** {len(feat_ids2)} found")
+                err2 = st.session_state.get("_wiql_last_error","none")
+                st.write(f"**Feature query error:** {err2}")
+
+                if not feat_ids2:
+                    q_tag = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'HRM' AND [System.WorkItemType] = 'Feature' AND [System.Tags] CONTAINS '{pi2}'"
+                    tag_ids = cl2._wiql("HRM", q_tag)
+                    st.write(f"**Features via Tags='{pi2}':** {len(tag_ids)} found")
+
+                if feat_ids2:
+                    sample2 = cl2.get_wi_batch(feat_ids2[:1], [
+                        "System.Id","System.Title","System.State",
+                        "Custom.PI","Custom.ScrumTeamOwnership","Custom.PlannedDevEffort"
+                    ])
+                    if sample2:
+                        st.json(sample2[0].get("fields",{}))
+        else:
+            st.warning("Not connected to Azure DevOps")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
