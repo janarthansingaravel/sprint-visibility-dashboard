@@ -249,10 +249,22 @@ class DevOpsClient:
 
     def _wiql(self, proj, query):
         url = f"{self.org}/{proj}/_apis/wit/wiql?api-version=7.0"
-        d = self._post(url, {"query": query})
-        if d and d.get("workItems"):
-            return [w["id"] for w in d["workItems"]]
-        return []
+        try:
+            r = requests.post(url, headers=self.h, json={"query": query}, timeout=15)
+            if not r.ok:
+                # Store error for debugging
+                st.session_state["_wiql_last_error"] = f"{r.status_code}: {r.text[:300]}"
+                return []
+            d = r.json()
+            if d.get("workItems"):
+                return [w["id"] for w in d["workItems"]]
+            # relations-based result
+            if d.get("workItemRelations"):
+                return [w["target"]["id"] for w in d["workItemRelations"] if w.get("target")]
+            return []
+        except Exception as e:
+            st.session_state["_wiql_last_error"] = str(e)
+            return []
 
     def get_sprint(self, proj, team):
         base = f"{self.org}/{proj}/{requests.utils.quote(team)}/_apis/work/teamsettings/iterations"
@@ -1987,22 +1999,35 @@ If features show 0, your Azure DevOps PI field name may differ.<br><br>
                 pi  = st.session_state.get("current_pi","26R1")
                 if pat and "YOUR_ORG" not in org:
                     cl = DevOpsClient(org, pat)
-                    st.write(f"**Org:** {org}")
-                    st.write(f"**PI:** {pi}")
-                    # Test Epic query
+                    st.write(f"**Org:** {org} | **PI:** {pi}")
+
+                    # Test 1: Epic by title
                     epic_ids = cl.get_pi_epics("HRM", pi)
-                    st.write(f"**Epic IDs found:** {epic_ids}")
-                    # Test Feature query  
-                    feat_ids = []
-                    for field in ["Custom.PI","Custom.PIName"]:
-                        q = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'HRM' AND [System.WorkItemType] = 'Feature' AND [{field}] = '{pi}'"
-                        ids = cl._wiql("HRM", q)
-                        st.write(f"**Features via {field}:** {len(ids)} found")
-                        if ids:
-                            feat_ids = ids[:3]
-                            break
-                    if feat_ids:
-                        sample = cl.get_wi_batch(feat_ids[:1], ["System.Id","System.Title","System.State","Custom.PI","Custom.ScrumTeamOwnership","Custom.PlannedDevEffort"])
+                    st.write(f"**Epic IDs:** {epic_ids}")
+                    err = st.session_state.get("_wiql_last_error","")
+                    if err: st.error(f"Last WIQL error: {err}")
+
+                    # Test 2: Features via Custom.PI
+                    q = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'HRM' AND [System.WorkItemType] = 'Feature' AND [Custom.PI] = '{pi}'"
+                    ids = cl._wiql("HRM", q)
+                    st.write(f"**Features via Custom.PI:** {len(ids)}")
+                    err2 = st.session_state.get("_wiql_last_error","")
+                    if err2: st.error(f"Feature query error: {err2}")
+
+                    # Test 3: if Custom.PI fails, try without field filter to count features
+                    if not ids:
+                        q2 = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'HRM' AND [System.WorkItemType] = 'Feature' AND [System.Tags] CONTAINS '{pi}'"
+                        ids2 = cl._wiql("HRM", q2)
+                        st.write(f"**Features via Tags contains {pi}:** {len(ids2)}")
+
+                    # Show sample feature fields if found
+                    sample_ids = ids or []
+                    if sample_ids:
+                        sample = cl.get_wi_batch(sample_ids[:1], [
+                            "System.Id","System.Title","System.State",
+                            "Custom.PI","Custom.ScrumTeamOwnership",
+                            "Custom.PlannedDevEffort","Custom.PlannedQAEffort"
+                        ])
                         if sample:
                             st.write("**Sample feature fields:**")
                             st.json(sample[0].get("fields",{}))
