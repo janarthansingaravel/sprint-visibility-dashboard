@@ -665,82 +665,114 @@ def load_pm_action_items(org, pat, all_data):
 # GEMINI AI
 # ─────────────────────────────────────────────────────────────────
 def build_pi_context(pi_data, all_sprint_data):
-    """Build anonymised PI context for Gemini — no PII, no full names"""
-    features = pi_data.get("features", [])
-    ctx = f"""
-PI: {pi_data.get('pi_name', 'N/A')}
-PI dates: {pi_data.get('pi_start')} → {pi_data.get('pi_end')}
-Working days total: {pi_data.get('total_working_days')} | Remaining: {pi_data.get('remaining_working_days')}
+    """Build a concise PI context for Gemini — kept short to avoid token/rate issues."""
+    features  = pi_data.get("features", [])
+    pi_name   = pi_data.get("pi_name", "N/A")
+    pi_end    = pi_data.get("pi_end", "?")
+    remain_wd = pi_data.get("remaining_working_days", 0)
+    total_wd  = pi_data.get("total_working_days", 0)
 
-FEATURES IN PI ({len(features)} total):
-"""
-    status_counts = defaultdict(int)
-    for f in features:
-        status_counts[f["status"]] += 1
-    for s, c in status_counts.items():
-        ctx += f"  {s}: {c} features\n"
+    # Feature status summary
+    from collections import Counter
+    status_counts = Counter(f["status"] for f in features)
+    feat_summary  = ", ".join(f"{s}: {c}" for s, c in status_counts.most_common())
+    at_risk = [f["title"][:40] for f in features
+               if f["status"] in ("On Hold", "Blocked by Dependent Bugs")]
 
-    ctx += "\nFEATURE DETAILS:\n"
-    for f in features[:30]:  # cap at 30 to stay within token limits
-        ctx += f"  - [{f['status']}] {f['title'][:60]}\n"
-
-    ctx += "\nSPRINT TEAM SUMMARY:\n"
+    # Sprint team summary
+    team_lines = []
+    all_items  = []
     for td in all_sprint_data:
-        team = td.get("team", "")
-        ctx += (f"  {team}: {td.get('health','').upper()} | "
-                f"{td.get('comp_pct',0)}% complete | "
-                f"{td.get('high_count',0)} high spill | "
-                f"{td.get('over_count',0)} overburn | "
-                f"{td.get('blocked_count',0)} blocked\n")
+        all_items.extend(td.get("items", []))
+        team_lines.append(
+            f"  {td['team']}: {td.get('health','').upper()} | "
+            f"{td.get('comp_pct',0)}% done | "
+            f"{td.get('high_count',0)} high-spill | "
+            f"{td.get('over_count',0)} overburn | "
+            f"{td.get('blocked_count',0)} blocked"
+        )
 
-    all_items = [i for td in all_sprint_data for i in td.get("items", [])]
-    high_spill = [i for i in all_items if i.get("spill_risk") == "high"]
-    ctx += f"\nHIGH SPILL ITEMS ({len(high_spill)}):\n"
-    for i in high_spill[:10]:
-        ctx += f"  - [{i.get('state')}] {i.get('title','')[:55]} | {' | '.join(i.get('spill_reasons',[]))}\n"
+    # Top 5 high-spill items only
+    high_spill = [i for i in all_items if i.get("spill_risk") == "high"][:5]
+    spill_lines = [
+        f"  - [{i.get('state')}] {i.get('title','')[:45]} ({i.get('team','')})"
+        for i in high_spill
+    ]
 
-    overburn = [i for i in all_items if i.get("is_overburn")]
-    ctx += f"\nOVERBURN ITEMS ({len(overburn)}):\n"
-    for i in overburn[:10]:
-        ctx += f"  - {i.get('title','')[:55]} | +{i.get('overrun',0)}h | {i.get('state')}\n"
+    total_est  = sum(i.get("est",0) or 0 for i in all_items)
+    total_done = sum(i.get("done",0) or 0 for i in all_items)
+    comp_pct   = round(total_done / total_est * 100) if total_est > 0 else 0
+
+    ctx = f"""PI: {pi_name} | End: {pi_end} | {remain_wd}/{total_wd} working days left
+Sprint completion: {comp_pct}% ({total_done:.0f}h of {total_est:.0f}h)
+Features ({len(features)} total): {feat_summary}
+At-risk features: {', '.join(at_risk) if at_risk else 'None'}
+
+TEAM HEALTH:
+{chr(10).join(team_lines)}
+
+TOP HIGH-SPILL ITEMS:
+{chr(10).join(spill_lines) if spill_lines else '  None'}"""
 
     return ctx
 
 def call_gemini(prompt, context="", key=""):
-    if not key:
-        return "⚠️ Gemini API key not configured. Add it to Streamlit Secrets under [gemini] api_key."
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-    system = f"""You are a PI execution assistant for an Agile Release Train managing 5 Scrum teams 
-on the HRM project. You have access to live sprint and PI data. Be concise, actionable, and direct.
-Format responses clearly. Use bullet points for lists. Highlight risks in bold.
-
-LIVE PI & SPRINT DATA:
-{context}"""
-    payload = {
-        "contents": [{"parts": [{"text": f"{system}\n\nUser question: {prompt}"}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024}
-    }
     import time
-    for attempt in range(3):
+    if not key:
+        return "⚠️ Gemini API key not configured. Add it under [gemini] api_key in Streamlit Secrets."
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+    # Enforce minimum gap between requests to avoid 429
+    last_call = st.session_state.get("_gemini_last_call", 0)
+    elapsed = time.time() - last_call
+    if elapsed < 5:  # enforce 5s minimum between calls
+        time.sleep(5 - elapsed)
+
+    # Trim context to ~2000 chars to keep tokens low and responses fast
+    ctx_trimmed = context[:2000] if len(context) > 2000 else context
+
+    system = (
+        "You are a PI execution assistant for an Agile Release Train. "
+        "You manage 5 Scrum teams on the HRM project. "
+        "Be concise, direct and actionable. Use bullet points. Bold key risks.\n\n"
+        f"LIVE DATA SUMMARY:\n{ctx_trimmed}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": f"{system}\n\nQuestion: {prompt}"}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 800}
+    }
+
+    for attempt in range(2):
         try:
+            st.session_state["_gemini_last_call"] = time.time()
             r = requests.post(f"{url}?key={key}", json=payload, timeout=30)
             if r.status_code == 429:
-                wait = 15 * (attempt + 1)
-                time.sleep(wait)
-                continue
+                if attempt == 0:
+                    time.sleep(20)   # wait 20s then retry once
+                    continue
+                retry_after = 60
+                try:
+                    retry_after = int(r.headers.get("Retry-After", 60))
+                except Exception:
+                    pass
+                return (
+                    f"⚠️ **Rate limit reached** (Gemini free tier: 15 requests/min).\n\n"
+                    f"Please wait about **{retry_after} seconds** then ask again.\n\n"
+                    f"*Tip: avoid clicking quick prompts back-to-back — wait for each response first.*"
+                )
             r.raise_for_status()
             data = r.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            candidates = data.get("candidates", [])
+            if not candidates:
+                return "⚠️ Gemini returned an empty response. Please try again."
+            return candidates[0]["content"]["parts"][0]["text"]
+        except requests.exceptions.Timeout:
+            return "⚠️ Gemini took too long to respond (timeout). Please try again."
         except requests.exceptions.HTTPError as e:
-            if r.status_code == 429:
-                if attempt == 2:
-                    return "⚠️ Gemini rate limit reached (free tier: 15 req/min). Wait 60 seconds and try again."
-                time.sleep(15 * (attempt + 1))
-            else:
-                return f"⚠️ Gemini error: {str(e)}"
+            return f"⚠️ Gemini API error {r.status_code}: {str(e)[:120]}"
         except Exception as e:
-            return f"⚠️ Gemini error: {str(e)}"
-    return "⚠️ Gemini rate limit — please wait a moment and try again."
+            return f"⚠️ Unexpected error: {str(e)[:120]}"
+    return "⚠️ Gemini did not respond after retry. Please wait 30 seconds and try again."
 
 def get_proactive_insights(context, key):
     prompt = """Analyse the PI and sprint data and give me exactly 3 proactive insights I should act on TODAY.
@@ -1378,65 +1410,77 @@ def render_pi_tab(pi_data, all_sprint_data):
                 """, unsafe_allow_html=True)
 
         # Quick prompt buttons
-        st.markdown("<div style='margin-top:8px'>", unsafe_allow_html=True)
         quick_prompts = [
-            ("⚠️ What to escalate today?", "What should I escalate to leadership today based on the PI data? Be specific with team names and item counts."),
-            ("📄 Draft PI review update", "Draft a concise PI review status update I can share with stakeholders. Include overall confidence, feature status, and top 2 risks."),
-            ("📉 Why is Beta Brigade low?", "Analyse Beta Brigade's performance. What is causing their low delivery and what should the Scrum Master do?"),
-            ("🎯 Will we hit PI end?", f"Based on current velocity and remaining work, will we complete all PI {pi_name} commitments by {pi_end}? Which features are at risk?"),
+            ("⚠️ Escalate today?",    "What should I escalate to leadership today based on the PI data? Be specific with team names and item counts."),
+            ("📄 Draft PI update",    "Draft a concise PI review status update I can share with stakeholders. Include overall confidence, feature status, and top 2 risks."),
+            ("📉 Beta Brigade low?",  "Analyse Beta Brigade's performance. What is causing their low delivery and what should the Scrum Master do?"),
+            ("🎯 Hit PI end date?",   f"Based on current velocity and remaining work, will we complete all PI {pi_name} commitments by {pi_end}? Which features are at risk?"),
         ]
         for label, prompt in quick_prompts:
-            if st.button(label, key=f"qp_{label[:10]}", use_container_width=True):
+            if st.button(label, key=f"qp_{label[:12]}", use_container_width=True):
                 st.session_state.setdefault("pi_chat_messages", [])
                 st.session_state["pi_chat_messages"].append({"role": "user", "content": prompt})
                 st.session_state["pi_chat_pending"] = prompt
-        st.markdown("</div>", unsafe_allow_html=True)
+                st.rerun()
 
-        # Chat history
-        st.markdown("<div style='margin-top:8px'>", unsafe_allow_html=True)
+        # Chat history display
         messages = st.session_state.get("pi_chat_messages", [])
         if not messages:
             st.markdown("""
             <div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;
-                 padding:10px;font-size:11px;color:#6b7280;line-height:1.6">
-              Ask me anything about PI progress, team performance, feature risks, or have me draft your status update.
+                 padding:10px;font-size:11px;color:#6b7280;line-height:1.6;margin-top:8px">
+              Ask me anything about PI progress, team performance, feature risks,
+              or use the quick buttons above.
             </div>
             """, unsafe_allow_html=True)
-        for msg in messages[-6:]:  # show last 6 messages
-            if msg["role"] == "user":
-                st.markdown(f"""
-                <div style="background:#eff6ff;border-radius:10px;padding:8px 10px;
-                     font-size:11px;color:#1e3a5f;margin-bottom:6px;text-align:right">{msg['content'][:200]}</div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div style="background:#f8fafc;border-left:2px solid #2563eb;
-                     border-radius:0 8px 8px 0;padding:8px 10px;
-                     font-size:11px;color:#1a202c;margin-bottom:6px;line-height:1.6">
-                  <div style="font-size:9px;font-weight:700;color:#2563eb;margin-bottom:3px">✨ GEMINI</div>
-                  {msg['content'][:500].replace(chr(10),'<br>')}
-                </div>
-                """, unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            for msg in messages[-8:]:
+                if msg["role"] == "user":
+                    st.markdown(
+                        f'<div style="background:#eff6ff;border-radius:8px;padding:8px 10px;'
+                        f'font-size:11px;color:#1e3a5f;margin:4px 0;text-align:right">'
+                        f'{msg["content"][:200]}</div>',
+                        unsafe_allow_html=True)
+                else:
+                    clean = msg["content"].replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+                    st.markdown(
+                        f'<div style="background:#f0f7ff;border-left:3px solid #2563eb;'
+                        f'border-radius:0 8px 8px 0;padding:8px 10px;'
+                        f'font-size:11px;color:#1a202c;margin:4px 0;line-height:1.6">'
+                        f'<div style="font-size:9px;font-weight:700;color:#2563eb;margin-bottom:4px">✨ GEMINI</div>'
+                        f'{clean[:800]}</div>',
+                        unsafe_allow_html=True)
 
-        # Process pending response
+        # Process pending Gemini call (happens before chat_input renders)
         if st.session_state.get("pi_chat_pending"):
             pending = st.session_state.pop("pi_chat_pending")
-            with st.spinner("Gemini thinking..."):
+            with st.spinner("✨ Gemini thinking — please wait..."):
                 response = call_gemini(pending, ctx, gemini_key)
             st.session_state.setdefault("pi_chat_messages", [])
             st.session_state["pi_chat_messages"].append({"role": "assistant", "content": response})
-            st.rerun()
-
-        # Chat input
-        user_input = st.chat_input("Ask about PI progress...", key="pi_chat_input")
-        if user_input:
-            st.session_state.setdefault("pi_chat_messages", [])
-            st.session_state["pi_chat_messages"].append({"role": "user", "content": user_input})
-            st.session_state["pi_chat_pending"] = user_input
+            # Mark time so UI can show cooldown
+            import time
+            st.session_state["_gemini_last_call_ui"] = time.time()
             st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── CHAT INPUT — must be at page level, NOT inside st.columns ──
+    if gemini_key:
+        import time
+        last_ui = st.session_state.get("_gemini_last_call_ui", 0)
+        secs_since = time.time() - last_ui
+        cooldown = 8  # seconds to wait between requests
+        if 0 < secs_since < cooldown:
+            remaining = int(cooldown - secs_since) + 1
+            st.info(f"⏳ Ready in {remaining}s — Gemini free tier needs a brief pause between requests.")
+        else:
+            user_input = st.chat_input("Ask your PI assistant...", key="pi_chat_input")
+            if user_input and user_input.strip():
+                st.session_state.setdefault("pi_chat_messages", [])
+                st.session_state["pi_chat_messages"].append({"role": "user", "content": user_input})
+                st.session_state["pi_chat_pending"] = user_input
+                st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────
