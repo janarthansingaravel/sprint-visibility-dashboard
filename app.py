@@ -305,12 +305,40 @@ class DevOpsClient:
             ]
         out = []
         for i in range(0, len(ids), 200):
-            d = self._post(
-                f"{self.org}/_apis/wit/workitemsbatch?api-version=7.0",
-                {"ids": ids[i:i+200], "fields": fields}
-            )
-            if d:
-                out.extend(d.get("value", []))
+            batch = ids[i:i+200]
+            try:
+                r = requests.post(
+                    f"{self.org}/_apis/wit/workitemsbatch?api-version=7.0",
+                    headers=self.h,
+                    json={"ids": batch, "fields": fields},
+                    timeout=15
+                )
+                if r.ok:
+                    out.extend(r.json().get("value", []))
+                else:
+                    # Store error and try with minimal fields as fallback
+                    st.session_state["_wiql_last_error"] = f"batch {r.status_code}: {r.text[:200]}"
+                    # Fallback: fetch with minimal safe fields
+                    r2 = requests.post(
+                        f"{self.org}/_apis/wit/workitemsbatch?api-version=7.0",
+                        headers=self.h,
+                        json={"ids": batch, "fields": [
+                            "System.Id", "System.Title", "System.WorkItemType",
+                            "System.State", "System.AssignedTo", "System.Tags",
+                            "System.AreaPath", "Microsoft.VSTS.Common.Priority",
+                            "Microsoft.VSTS.Scheduling.StartDate",
+                            "Microsoft.VSTS.Scheduling.TargetDate",
+                            "Custom.PI", "Custom.PIPriorityNo",
+                            "Custom.ScrumTeamOwnership", "Custom.SolutionOwner",
+                            "Custom.DependantScrumTeam",
+                            "Custom.PlannedDevEffort", "Custom.PlannedQAEffort",
+                        ]},
+                        timeout=15
+                    )
+                    if r2.ok:
+                        out.extend(r2.json().get("value", []))
+            except Exception as e:
+                st.session_state["_wiql_last_error"] = str(e)
         return out
 
     def get_comments(self, proj, wi_id):
@@ -339,14 +367,17 @@ class DevOpsClient:
             return []
         fields = [
             "System.Id", "System.Title", "System.State", "System.AssignedTo",
-            "System.Tags", "System.AreaPath", "System.TeamProject",
+            "System.Tags", "System.AreaPath", "System.WorkItemType",
             "Microsoft.VSTS.Scheduling.StartDate",
             "Microsoft.VSTS.Scheduling.TargetDate",
             "Microsoft.VSTS.Common.Priority",
-            "Custom.PI", "Custom.PIPriorityNo", "Custom.POLevelPriority",
-            "Custom.ScrumTeamOwnership", "Custom.SolutionOwner",
+            "Custom.PI",
+            "Custom.PIPriorityNo",
+            "Custom.ScrumTeamOwnership",
+            "Custom.SolutionOwner",
             "Custom.DependantScrumTeam",
-            "Custom.PlannedDevEffort", "Custom.PlannedQAEffort",
+            "Custom.PlannedDevEffort",
+            "Custom.PlannedQAEffort",
         ]
         return self.get_wi_batch(ids, fields)
 
