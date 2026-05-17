@@ -357,6 +357,8 @@ class DevOpsClient:
             "Custom.PlannedQAEffort",
             "Custom.SolutionOwner",
             "Custom.DependantScrumTeam",
+            "Custom.DependentScrumTeam",
+            "Custom.DependantScrum",
         ]
         return self.get_wi_batch(ids, fields)
 
@@ -627,7 +629,9 @@ def load_pi_data(org, pat, pi_name, pi_field="Custom.PI", _cache_v=0):
         st_raw = fields.get("Custom.ScrumTeamOwnership", "") or ""
         # Normalise to our known team names
         scrum_team = st_raw.strip() if st_raw else "—"
-        dep_raw = fields.get("Custom.DependantScrumTeam", "") or ""
+        dep_raw = (fields.get("Custom.DependantScrumTeam") or
+                   fields.get("Custom.DependentScrumTeam") or
+                   fields.get("Custom.DependantScrum") or "") 
         dep_team = dep_raw.strip() if dep_raw else "—"
         sol_owner_raw = fields.get("Custom.SolutionOwner", {})
         if isinstance(sol_owner_raw, dict):
@@ -1142,7 +1146,10 @@ def render_pi_tab(pi_data, all_sprint_data):
                         "System.Id","System.Title","System.State",
                         "Custom.PI","Custom.ScrumTeamOwnership",
                         "Custom.PlannedDevEffort","Custom.PlannedQAEffort",
-                        "Custom.SolutionOwner","Custom.DependantScrumTeam",
+                        "Custom.SolutionOwner",
+                        "Custom.DependantScrumTeam",
+                        "Custom.DependentScrumTeam",
+                        "Custom.DependantScrum",
                     ])
                     if sample2:
                         st.json(sample2[0].get("fields",{}))
@@ -1273,149 +1280,116 @@ def render_pi_tab(pi_data, all_sprint_data):
         "🐛 Bug summary",
     ])
 
-    def sort_header(label, col, current_col, current_asc):
-        icon = "↑" if (current_col==col and current_asc) else "↓" if (current_col==col) else "↕"
-        return f"{label} {icon}"
-
     def render_feature_table(feat_list, key_prefix):
         if not feat_list:
             st.success("✅ No items in this category")
             return
 
-        # Active filter display + clear
-        fc1, fc2 = st.columns([5,1])
+        # Filter info + export
+        fc1, fc2 = st.columns([5, 1])
         with fc1:
             tags = []
             if sf: tags.append(f"Status: {sf}")
             if tf: tags.append(f"Team: {tf}")
-            tag_html = " &nbsp;·&nbsp; ".join(f'<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:20px;padding:1px 8px;font-size:11px">{t}</span>' for t in tags)
-            st.markdown(f'<div style="font-size:12px;color:#6b7280;padding:4px 0">Showing {len(feat_list)} features {tag_html}</div>', unsafe_allow_html=True)
+            tag_html = " &nbsp;·&nbsp; ".join(
+                f'<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;'
+                f'border-radius:20px;padding:1px 8px;font-size:11px">{t}</span>' for t in tags)
+            st.markdown(
+                f'<div style="font-size:12px;color:#6b7280;padding:4px 0">'
+                f'Showing {len(feat_list)} features {tag_html}</div>',
+                unsafe_allow_html=True)
         with fc2:
             dl_buf = build_feature_excel(feat_list, task_data)
-            st.download_button("📥 Export", data=dl_buf,
+            st.download_button("📥 Export all", data=dl_buf,
                                file_name=f"pi_{pi_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                key=f"dl_{key_prefix}", use_container_width=True)
 
-        # Column headers with sort buttons
-        hcols = st.columns([3,5,12,8,7,7,5,5,5,5,5,5,4,4])
-        headers = [
-            ("PI #","pi_priority"),("ID","id"),("Title","title"),("Solution owner","solution_owner"),
-            ("Scrum team","scrum_team"),("Dep. team","dep_team"),
-            ("Plan dev","pdev"),("Act dev","dev_actual"),("Over dev","over_dev"),
-            ("Plan QA","pqa"),("Act QA","qa_actual"),("Over QA","over_qa"),
-            ("Bugs","bug_count"),("Link",""),
-        ]
-        for col_el, (lbl, col_key) in zip(hcols, headers):
-            with col_el:
-                if col_key:
-                    arrow = "↑" if (sc_col==col_key and sc_asc) else "↓" if sc_col==col_key else ""
-                    if st.button(f"{lbl}{' '+arrow if arrow else ''}", key=f"sh_{key_prefix}_{col_key}", use_container_width=True):
-                        if st.session_state["pi_sort_col"] == col_key:
-                            st.session_state["pi_sort_asc"] = not st.session_state["pi_sort_asc"]
-                        else:
-                            st.session_state["pi_sort_col"] = col_key
-                            st.session_state["pi_sort_asc"] = True
-                        st.rerun()
-                else:
-                    st.markdown(f'<div style="font-size:10px;color:#9ca3af;padding:5px 0">{lbl}</div>', unsafe_allow_html=True)
-
-        st.markdown("<div style='height:2px;background:#e8ecf0;margin-bottom:6px'></div>", unsafe_allow_html=True)
-
+        # Build dataframe
+        rows = []
         for f in feat_list:
             odev = f["over_dev"]; oqa = f["over_qa"]
-            is_or = f["is_overrun"]
-            row_bg = "#fef2f2" if is_or else "#ffffff"
-            odev_c = "#dc2626" if odev>0 else "#16a34a"
-            oqa_c  = "#dc2626" if oqa>0 else "#16a34a"
-            odev_t = f"+{odev}h" if odev>0 else "—"
-            oqa_t  = f"+{oqa}h"  if oqa>0  else "—"
+            rows.append({
+                "PI Priority #":    f.get("pi_priority") or "—",
+                "Feature ID":       f["id"],
+                "Title":            f["title"],
+                "Feature State":    f["state"],
+                "Status":           f["status"],
+                "Project":          f.get("project", "HRM"),
+                "PI":               f.get("tags", "").split(";")[0].strip() if f.get("tags") else pi_name,
+                "Assigned To":      f.get("assignee", "—"),
+                "Solution Owner":   f.get("solution_owner", "—"),
+                "Scrum Team":       f.get("scrum_team", "—"),
+                "Dep. Team":        f.get("dep_team", "—"),
+                "Plan Dev (h)":     f.get("pdev", 0) or 0,
+                "Act Dev (h)":      f["dev_actual"],
+                "Over Dev (h)":     round(odev, 1) if odev > 0 else 0,
+                "Plan QA (h)":      f.get("pqa", 0) or 0,
+                "Act QA (h)":       f["qa_actual"],
+                "Over QA (h)":      round(oqa, 1) if oqa > 0 else 0,
+                "Bugs":             f["bug_count"],
+                "⚠️ Overrun":       "YES" if f["is_overrun"] else "",
+                "DevOps":           f.get("devops_url", ""),
+            })
+        df = pd.DataFrame(rows)
 
-            # Status badge
-            sc_info = PI_STATUS_COLORS.get(f["status"], {"bg":"#f9fafb","color":"#6b7280","border":"#e5e7eb"})
+        # Highlight overrun rows
+        def highlight_overrun(row):
+            if row["⚠️ Overrun"] == "YES":
+                return ["background-color: #fef2f2"] * len(row)
+            return [""] * len(row)
 
-            rcols = st.columns([3,5,12,8,7,7,5,5,5,5,5,5,4,4])
-            with rcols[0]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 4px;font-size:12px;font-weight:700;color:#374151;text-align:center;border-radius:4px">{f.get("pi_priority","—")}</div>',unsafe_allow_html=True)
-            with rcols[1]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;color:#2563eb">{f["id"]}</div>',unsafe_allow_html=True)
-            with rcols[2]:
-                title_short = f["title"][:45]+"…" if len(f["title"])>45 else f["title"]
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:12px;font-weight:500" title="{f["title"]}">{title_short}<br><span style="font-size:10px;background:{sc_info["bg"]};color:{sc_info["color"]};border-radius:10px;padding:1px 6px">{f["status"]}</span></div>',unsafe_allow_html=True)
-            with rcols[3]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;color:#374151">{f.get("solution_owner","—")[:18]}</div>',unsafe_allow_html=True)
-            with rcols[4]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px">{str(f.get("scrum_team","—"))[:12]}</div>',unsafe_allow_html=True)
-            with rcols[5]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;color:#6b7280">{str(f.get("dep_team","—"))[:12]}</div>',unsafe_allow_html=True)
-            with rcols[6]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f.get("pdev",0) or 0}h</div>',unsafe_allow_html=True)
-            with rcols[7]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f["dev_actual"]}h</div>',unsafe_allow_html=True)
-            with rcols[8]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center;color:{odev_c};font-weight:{"600" if odev>0 else "400"}">{odev_t}</div>',unsafe_allow_html=True)
-            with rcols[9]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f.get("pqa",0) or 0}h</div>',unsafe_allow_html=True)
-            with rcols[10]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center">{f["qa_actual"]}h</div>',unsafe_allow_html=True)
-            with rcols[11]:
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:11px;text-align:center;color:{oqa_c};font-weight:{"600" if oqa>0 else "400"}">{oqa_t}</div>',unsafe_allow_html=True)
-            with rcols[12]:
-                bc = f["bug_count"]
-                bc_c = "#dc2626" if bc>0 else "#9ca3af"
-                st.markdown(f'<div style="background:{row_bg};padding:6px 2px;font-size:12px;font-weight:700;color:{bc_c};text-align:center">{bc if bc>0 else "—"}</div>',unsafe_allow_html=True)
-            with rcols[13]:
-                st.link_button("↗", f.get("devops_url","#"), use_container_width=True)
+        styled = df.style.apply(highlight_overrun, axis=1)
 
-            # Expand/collapse button
-            exp_key  = f"exp_{key_prefix}_{f['id']}"
-            is_exp   = st.session_state.get("pi_expanded_feat") == f"{key_prefix}_{f['id']}"
-            exp_label= "▲ Hide tasks" if is_exp else "▼ Show tasks"
-            if st.button(exp_label, key=exp_key, use_container_width=True):
-                st.session_state["pi_expanded_feat"] = None if is_exp else f"{key_prefix}_{f['id']}"
-                st.rerun()
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            hide_index=True,
+            height=480,
+            key=f"df_{key_prefix}",
+            column_config={
+                "Feature ID": st.column_config.NumberColumn("Feature ID", format="%d"),
+                "DevOps":     st.column_config.LinkColumn("DevOps", display_text="Open ↗"),
+                "Plan Dev (h)":  st.column_config.NumberColumn(format="%.1f"),
+                "Act Dev (h)":   st.column_config.NumberColumn(format="%.1f"),
+                "Over Dev (h)":  st.column_config.NumberColumn(format="%.1f"),
+                "Plan QA (h)":   st.column_config.NumberColumn(format="%.1f"),
+                "Act QA (h)":    st.column_config.NumberColumn(format="%.1f"),
+                "Over QA (h)":   st.column_config.NumberColumn(format="%.1f"),
+                "Bugs":          st.column_config.NumberColumn(format="%d"),
+            }
+        )
 
-            if is_exp:
-                tasks = f.get("tasks", [])
-                if not tasks:
-                    st.info("No tasks/bugs found under this feature.")
-                else:
-                    # Download button
-                    dl_t = build_task_excel(f, tasks)
-                    dl_c1, dl_c2 = st.columns([6,1])
-                    with dl_c1:
-                        st.markdown(f'<div style="background:#f8fafc;border:1px solid #e8ecf0;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700">📋 Tasks &amp; bugs under {f["id"]} — {len(tasks)} items</div>',unsafe_allow_html=True)
-                    with dl_c2:
-                        st.download_button("📥", data=dl_t,
-                                           file_name=f"tasks_{f['id']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                           key=f"tdl_{key_prefix}_{f['id']}", use_container_width=True)
+        # Per-feature download section
+        st.markdown("---")
+        st.markdown('<div style="font-size:13px;font-weight:700;color:#1a202c;margin-bottom:8px">📥 Download tasks by feature</div>',
+                    unsafe_allow_html=True)
+        st.markdown('<div style="font-size:11px;color:#6b7280;margin-bottom:8px">Select a feature to download all its tasks as Excel</div>',
+                    unsafe_allow_html=True)
 
-                    th1,th2,th3,th4,th5,th6,th7,th8 = st.columns([5,14,8,6,5,5,5,5])
-                    for th,lbl in zip([th1,th2,th3,th4,th5,th6,th7,th8],
-                                      ["ID","Title","Assignee","State","Activity","Est","Done","Rem"]):
-                        with th:
-                            st.markdown(f'<div style="font-size:10px;color:#9ca3af;font-weight:600;padding:4px 2px">{lbl}</div>',unsafe_allow_html=True)
-
-                    for t in tasks:
-                        t_actual = t.get("done",0) + t.get("rem",0)
-                        t_over   = t_actual > (t.get("est",0) or 0) and (t.get("est",0) or 0) > 0
-                        t_act    = t.get("activity","")
-                        is_excl  = t_act not in DEV_ACTIVITIES and t_act not in QA_ACTIVITIES and t.get("type")!="Bug"
-                        t_bg     = "#fef2f2" if t_over else "#f8fafc"
-                        tc1,tc2,tc3,tc4,tc5,tc6,tc7,tc8 = st.columns([5,14,8,6,5,5,5,5])
-                        with tc1: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;color:#2563eb">{t["id"]}</div>',unsafe_allow_html=True)
-                        with tc2: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;{"color:#9ca3af;" if is_excl else ""}" title="{t["title"]}">{t["title"][:40]}{"…" if len(t["title"])>40 else ""}</div>',unsafe_allow_html=True)
-                        with tc3: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px">{t["assignee"][:16]}</div>',unsafe_allow_html=True)
-                        with tc4:
-                            s_c = "#16a34a" if t["state"] in COMPLETED_STATES else "#2563eb" if t["state"]=="In Progress" else "#6b7280"
-                            st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;color:{s_c}">{t["state"]}</div>',unsafe_allow_html=True)
-                        with tc5: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:10px;color:#6b7280">{"(excl)" if is_excl else t_act[:8]}</div>',unsafe_allow_html=True)
-                        with tc6: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;text-align:center">{t.get("est",0)}h</div>',unsafe_allow_html=True)
-                        with tc7: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;text-align:center">{t.get("done",0)}h</div>',unsafe_allow_html=True)
-                        with tc8: st.markdown(f'<div style="background:{t_bg};padding:4px 2px;font-size:11px;text-align:center;color:{"#d97706" if t.get("rem",0)>0 else "#9ca3af"}">{t.get("rem",0)}h</div>',unsafe_allow_html=True)
-
-            st.markdown("<div style='height:1px;background:#f3f4f6'></div>", unsafe_allow_html=True)
+        # Feature selector + download
+        feat_options = {f"{f['id']} — {f['title'][:60]}": f for f in feat_list}
+        sel_key = f"feat_sel_{key_prefix}"
+        selected_label = st.selectbox("Select feature", options=list(feat_options.keys()), key=sel_key)
+        if selected_label:
+            selected_feat = feat_options[selected_label]
+            tasks = selected_feat.get("tasks", [])
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(
+                    f'<div style="font-size:12px;color:#6b7280">'
+                    f'{len(tasks)} tasks/bugs under this feature</div>',
+                    unsafe_allow_html=True)
+            with col2:
+                task_xl = build_task_excel(selected_feat, tasks)
+                st.download_button(
+                    f"📥 Download tasks",
+                    data=task_xl,
+                    file_name=f"tasks_{selected_feat['id']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"tdl_{key_prefix}_{selected_feat['id']}",
+                    use_container_width=True
+                )
 
     # ── RENDER EACH TAB ──
     with tab_board: render_feature_table(enriched,       "board")
